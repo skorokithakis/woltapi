@@ -191,6 +191,11 @@ python -m pytest
 The tests use made-up responses. They do not contact Wolt, need your token, or
 place orders.
 
+## Releases
+
+Maintainers: see [RELEASING.md](RELEASING.md) for tests, release PRs, and automatic
+PyPI publishing.
+
 ## License
 
 Licensed under the GNU Affero General Public License, version 3
