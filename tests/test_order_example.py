@@ -25,7 +25,14 @@ def load_example(monkeypatch):
     return runpy.run_path(str(examples / "order.py"))
 
 
-def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
+def setup_checkout(
+    monkeypatch,
+    *,
+    save_basket=False,
+    final_answer="QUOTE",
+    configure_catalog=None,
+    input_answers=None,
+):
     assortment, venue, delivery, _, item = selection_inputs()
     catalog = assortment["items"][0]
     catalog["name"] = "Synthetic pizza"
@@ -42,6 +49,8 @@ def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
     assortment["options"][0]["values"][0]["name"] = [
         {"lang": "en", "value": "Extra cheese"}
     ]
+    if configure_catalog is not None:
+        configure_catalog(assortment, catalog)
     responses = [
         {
             "sections": [
@@ -102,18 +111,21 @@ def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
             }
         },
     ]
-    answers = [
-        "YES",
-        "1",
-        "1",
-        "1",
-        "1",
-        "2700",
-        "0",
-        "1",
-        "YES",
-        "1",
-    ]
+    answers = (
+        input_answers
+        if input_answers is not None
+        else [
+            "1",
+            "1",
+            "1",
+            "1",
+            "YES",
+            "0",
+            "1",
+            "YES",
+            "1",
+        ]
+    )
     if save_basket:
         responses.append({"id": "basket-1", "venue_id": venue.id})
         answers.append("SAVE BASKET")
@@ -192,6 +204,7 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
         "STOPPED",
     ):
         assert expected in output
+    assert "CHECKOUT TEST ONLY" not in output
     for private in (
         "PRIVATE ADDRESS",
         "PRIVATE PHONE",
@@ -202,18 +215,28 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
         assert private not in output
 
 
-def test_cancel_before_network(monkeypatch, capsys):
-    example = load_example(monkeypatch)
-    monkeypatch.setattr("builtins.input", lambda prompt: "no")
-    example["checkout"](object(), object(), {})
-    assert "No requests sent" in capsys.readouterr().out
-
-
 def test_cancel_before_quote(monkeypatch):
     example = load_example(monkeypatch)
     client, args, opener = setup_checkout(monkeypatch, final_answer="no")
     example["checkout"](client, args, {})
     assert len(opener.requests) == 5
+
+
+def test_declining_computed_price_stops_before_delivery_card_and_quote(monkeypatch):
+    example = load_example(monkeypatch)
+    client, args, opener = setup_checkout(
+        monkeypatch,
+        input_answers=["1", "1", "1", "1", "no"],
+    )
+    example["checkout"](client, args, {})
+    assert [(r.get_method(), urlsplit(r.full_url).path) for r in opener.requests] == [
+        ("POST", "/v1/pages/search"),
+        ("GET", "/order-xp/web/v1/pages/venue/slug/test-restaurant/static"),
+        (
+            "GET",
+            "/consumer-api/consumer-assortment/v1/venues/slug/test-restaurant/assortment",
+        ),
+    ]
 
 
 def test_basket_flag_still_needs_explicit_confirmation(monkeypatch):
@@ -231,11 +254,145 @@ def test_basket_flag_still_needs_explicit_confirmation(monkeypatch):
 def test_invalid_option_count_stops_before_card_and_quote(monkeypatch):
     example = load_example(monkeypatch)
     client, args, opener = setup_checkout(monkeypatch)
-    answers = iter(["YES", "1", "1", "1", "0"])
+    answers = iter(["1", "1", "1", "0"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     with pytest.raises(example["CheckoutInputError"], match="catalog limits"):
         example["checkout"](client, args, {})
     assert len(opener.requests) == 3
+
+
+@pytest.mark.parametrize("price", [None, "700"])
+def test_selected_option_price_must_be_an_integer(monkeypatch, price):
+    example = load_example(monkeypatch)
+    item = {
+        "options": [
+            {
+                "id": "item-config-1",
+                "option_id": "option-1",
+                "prerequisite_values": [],
+                "multi_choice_config": {
+                    "total_range": {"min": 1, "max": 1},
+                    "max_single_selections": 1,
+                    "free_selections": 0,
+                },
+            }
+        ]
+    }
+    assortment = {
+        "options": [
+            {
+                "id": "option-1",
+                "type": "choice",
+                "name": [{"lang": "en", "value": "Toppings"}],
+                "values": [
+                    {
+                        "id": "value-1",
+                        "name": [{"lang": "en", "value": "Extra cheese"}],
+                        **({"price": price} if price is not None else {}),
+                    }
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr("builtins.input", lambda prompt: "1")
+    with pytest.raises(example["CheckoutInputError"], match="option value price"):
+        example["select_options"](item, assortment, "en")
+
+
+def test_empty_option_count_selects_no_value(monkeypatch):
+    example = load_example(monkeypatch)
+    item = {
+        "options": [
+            {
+                "id": "item-config-1",
+                "option_id": "option-1",
+                "prerequisite_values": [],
+                "multi_choice_config": {
+                    "total_range": {"min": 0, "max": 1},
+                    "max_single_selections": 1,
+                    "free_selections": 0,
+                },
+            }
+        ]
+    }
+    assortment = {
+        "options": [
+            {
+                "id": "option-1",
+                "type": "choice",
+                "name": [{"lang": "en", "value": "Extras"}],
+                "values": [
+                    {
+                        "id": "value-1",
+                        "name": [{"lang": "en", "value": "Extra cheese"}],
+                        "price": 700,
+                    }
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    assert example["select_options"](item, assortment, "en") == ([], [], 0)
+
+
+@pytest.mark.parametrize("price", [None, "2000"])
+def test_catalog_item_price_must_be_an_integer(monkeypatch, price):
+    example = load_example(monkeypatch)
+
+    def configure_catalog(_, catalog):
+        if price is None:
+            del catalog["price"]
+        else:
+            catalog["price"] = price
+
+    client, args, opener = setup_checkout(
+        monkeypatch,
+        configure_catalog=configure_catalog,
+        input_answers=["1", "1"],
+    )
+    with pytest.raises(example["CheckoutInputError"], match="catalog item price"):
+        example["checkout"](client, args, {})
+    assert len(opener.requests) == 3
+
+
+def test_configured_unit_price_is_not_multiplied_by_item_quantity(monkeypatch):
+    example = load_example(monkeypatch)
+
+    def configure_catalog(assortment, _):
+        assortment["options"][0]["values"].append(
+            {
+                "id": "value-2",
+                "price": 300,
+                "name": [{"lang": "en", "value": "Extra pepperoni"}],
+            }
+        )
+
+    client, args, opener = setup_checkout(
+        monkeypatch,
+        save_basket=True,
+        configure_catalog=configure_catalog,
+        input_answers=[
+            "1",
+            "1",
+            "2",
+            "2",
+            "1",
+            "YES",
+            "0",
+            "1",
+            "YES",
+            "1",
+            "SAVE BASKET",
+            "QUOTE",
+        ],
+    )
+    example["checkout"](client, args, {})
+    basket = json.loads(opener.requests[-2].data)
+    checkout = json.loads(opener.requests[-1].data)["purchase_plan"]
+    assert basket["items"][0]["count"] == 2
+    assert basket["items"][0]["price"] == 3700
+    assert checkout["menu_items"][0]["count"] == 2
+    assert checkout["menu_items"][0]["end_amount"] == 3700
 
 
 def test_missing_metadata_does_not_invent_values(monkeypatch):

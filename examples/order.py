@@ -32,9 +32,10 @@ def money(amount, currency):
     return f"{sign}{abs(amount) // 100}.{abs(amount) % 100:02d} {currency}"
 
 
-def number(prompt, minimum=0, maximum=None):
+def number(prompt, minimum=0, maximum=None, empty_value=None):
     try:
-        value = int(input(prompt))
+        answer = input(prompt)
+        value = empty_value if answer == "" and empty_value is not None else int(answer)
     except ValueError:
         raise CheckoutInputError(
             "Enter a whole number, not a decimal amount."
@@ -100,6 +101,7 @@ def select_options(item, assortment, language):
         raise CheckoutInputError("Missing catalog option lists.")
     selected = []
     descriptions = []
+    option_amount = 0
     for config in configurations:
         if not isinstance(config, dict) or config.get("prerequisite_values") != []:
             raise CheckoutInputError(
@@ -139,23 +141,26 @@ def select_options(item, assortment, language):
         selections = []
         for value in values:
             name = text(value.get("name"), language)
-            count = number(f"Count for {name} (0 to {single}): ", 0, single)
+            count = number(
+                f"Count for {name} (0 to {single}): ", 0, single, empty_value=0
+            )
             if count:
+                price = value.get("price")
+                if type(price) is not int:
+                    raise CheckoutInputError(
+                        "Missing or invalid catalog option value price."
+                    )
                 selections.append(OptionValueSelection(value["id"], count))
                 descriptions.append(f"{count} x {name}")
+                option_amount += price * count
         if not low <= sum(v.count for v in selections) <= high:
             raise CheckoutInputError("Selected options do not meet the catalog limits.")
         if selections:
             selected.append(OptionSelection(config["id"], selections))
-    return selected, descriptions
+    return selected, descriptions, option_amount
 
 
 def checkout(client, args, context):
-    print("CHECKOUT TEST ONLY: no purchase submission exists in this script.")
-    print("This contacts Wolt for menus, saved targets/cards, and a checkout quote.")
-    if input("Continue? Type YES: ").strip() != "YES":
-        print("Cancelled. No requests sent.")
-        return
     found = client.search_venues(args.query, args.latitude, args.longitude)
     venue = choose("restaurant", found, lambda v: text(v.title or v.slug))
     static = client.get_venue_static(venue.slug).get("venue")
@@ -196,8 +201,11 @@ def checkout(client, args, context):
     methods = item.get("allowed_delivery_methods")
     if not isinstance(methods, list) or "homedelivery" not in methods:
         raise CheckoutInputError("This item does not explicitly support home delivery.")
+    item_price = item.get("price")
+    if type(item_price) is not int:
+        raise CheckoutInputError("Missing or invalid catalog item price.")
     count = number("Item quantity: ", 1)
-    options, option_names = select_options(item, assortment, args.language)
+    options, option_names, option_amount = select_options(item, assortment, args.language)
     checkout_fields = fields(
         derive_checkout_fields(assortment, item),
         context.get("checkout_fields", {}),
@@ -224,12 +232,11 @@ def checkout(client, args, context):
         ),
         "payment_fields",
     )
-    print(
-        "Open this same item with the same options in Wolt to check its configured price."
-    )
-    unit_amount = number(
-        "Price for ONE configured item, in cents (not delivery or tip): "
-    )
+    unit_amount = item_price + option_amount
+    print(f"Computed configured unit price: {money(unit_amount, currency)}")
+    if input("Does this match the Wolt UI? Type YES: ").strip() != "YES":
+        print("Cancelled before card lookup or quote.")
+        return
     tip = number("Courier tip in cents (0 for none): ")
     delivery = choose(
         "saved delivery target", client.list_delivery_targets(), delivery_description
