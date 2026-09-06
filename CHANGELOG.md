@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/skorokithakis/woltapi/compare/v0.3.0...v0.4.0) (2026-09-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* WoltClient.get_venue_basket was removed. Its per-venue read returns no venue slug and no option data, so it cannot support rebuilding a basket. Use get_baskets_page() instead.
+
+### Features
+
+* card-free basket saves and saved-basket rebuilds ([8017137](https://github.com/skorokithakis/woltapi/commit/801713757c89849e79cfda1cc7f978bc691e70d5))
+
+
+### Documentation
+
+* list get_venue_checkout_context in useful methods and note the shape error ([622cc3b](https://github.com/skorokithakis/woltapi/commit/622cc3bba5192d47ca72e043882847bc50068f47))
+
 ## [Unreleased]
 
 
