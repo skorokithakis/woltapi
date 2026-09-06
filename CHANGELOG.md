@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/skorokithakis/woltapi/compare/v0.4.1...v0.5.0) (2026-09-06)
+
+
+### Features
+
+* add WoltClient.delete_baskets ([54f5464](https://github.com/skorokithakis/woltapi/commit/54f5464c9f02d790585905e5cf802440f1a0cdc9))
+
+
+### Documentation
+
+* show how to list and bulk-delete saved baskets ([122e62c](https://github.com/skorokithakis/woltapi/commit/122e62c524ba925b91408ea793d38c958a50babb))
+
 ## [0.4.1](https://github.com/skorokithakis/woltapi/compare/v0.4.0...v0.4.1) (2026-09-06)
 
 
