@@ -7,6 +7,7 @@ restricted to venue slugs, item counts, and integer cent totals.
 
 import argparse
 import math
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -27,17 +28,17 @@ def venue_slug(saved_basket):
     if not isinstance(venue, Mapping):
         raise VerificationInputError("Saved basket venue is not an object.")
     slug = venue.get("slug")
-    if not isinstance(slug, str) or not slug or "\r" in slug or "\n" in slug:
+    if not isinstance(slug, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug) is None:
         raise VerificationInputError("Saved basket venue has no usable slug.")
     return slug
 
 
 def failure_line(slug, error):
-    """Format only library-safe error messages, never arbitrary response data."""
-    if isinstance(error, (VerificationInputError, WoltApiError)):
+    """Format only local static error messages, never response-derived data."""
+    if isinstance(error, VerificationInputError):
         message = str(error)
     else:
-        message = "Private details omitted."
+        message = "Details omitted."
     return f"FAIL venue={slug}: {type(error).__name__}: {message}"
 
 
