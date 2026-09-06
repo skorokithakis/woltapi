@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from browse import refresh_credentials, text
+from browse import TokenFileError, check_token_file, refresh_credentials, text
 
 from woltapi import (
     DeliverySelection,
@@ -329,6 +329,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--latitude", type=float, required=True)
     parser.add_argument("--longitude", type=float, required=True)
+    parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--query", default="pizza")
     parser.add_argument("--language", default="en")
     parser.add_argument(
@@ -349,14 +350,22 @@ def main():
         and -180 <= args.longitude <= 180
     ):
         parser.error("Provide valid latitude and longitude.")
+    check_token_file(parser, args.token_file)
     try:
         context = json.loads(args.context_file.read_text()) if args.context_file else {}
         if not isinstance(context, dict):
             raise CheckoutInputError("The context file must contain a JSON object.")
-        client = WoltClient(refresh_credentials(args.language))
+        client = WoltClient(refresh_credentials(args.language, args.token_file))
         checkout(client, args, context)
     except CheckoutInputError as exc:
         print(f"Checkout stopped: {exc}")
+        return 1
+    except TokenFileError:
+        print(
+            "Checkout stopped: could not save the refresh token to the token file."
+            " Wolt may have replaced it, so the stored value can be dead."
+            " Put a current __wrtoken value in the file."
+        )
         return 1
     except HTTPStatusError as exc:
         print(

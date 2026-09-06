@@ -45,15 +45,18 @@ lists some of its menu items. **It will not order anything or change your basket
 python examples/browse.py \
   --latitude 60.17 \
   --longitude 24.94 \
-  --query "pizza"
+  --query "pizza" \
+  --token-file ~/.wolt-token
 ```
 
 Replace the two numbers with your location. The example numbers are in Helsinki.
 Latitude and longitude are the two numbers that identify a place on a map.
 
-The script asks for your Wolt refresh token. Paste it and press Enter. Nothing
-will appear while you paste; that is intentional. See
-[Get a token](#get-a-token) below.
+`--token-file` is required. It names the file that holds your Wolt refresh
+token. On the first run the file does not exist yet, so the script asks for the
+token. Paste it and press Enter. Nothing will appear while you paste; that is
+intentional. The script then saves the token to that file, and later runs read
+it from there without asking. See [Get a token](#get-a-token) below.
 
 By default, it shows up to 5 recent orders and 20 menu items from the first
 restaurant in the search results. You can change that:
@@ -63,6 +66,7 @@ python examples/browse.py \
   --latitude 60.17 \
   --longitude 24.94 \
   --query "burger" \
+  --token-file ~/.wolt-token \
   --orders 3 \
   --menu-limit 50 \
   --venue-index 2
@@ -87,16 +91,22 @@ for your Wolt account. Treat it like a password.
 
 Do not share the token, put it in Git, or include it in screenshots.
 
-The example scripts read the token from the `WOLT_REFRESH_TOKEN` environment
-variable. An environment variable is a setting passed to a program when it
-starts. If it is not set, the scripts ask with a hidden prompt.
+The example scripts read the token from the file named by `--token-file`. If
+that file does not exist, or is empty, they ask with a hidden prompt and then
+save what you paste. The file is created readable only by you.
 
-Wolt may replace your refresh token over time. The scripts cannot store the
-replacement; they print a note when this happens. If a later run receives
-**HTTP 401**, your token has expired, was replaced, or was revoked; copy a
-current `__wrtoken` value from the browser. The library cannot sign you in.
-Programs that must survive replacement can persist it themselves, as described
-under [How token refresh works](#how-token-refresh-works).
+Wolt may replace your refresh token over time. The scripts save each
+replacement to the same file, so later runs keep working without another visit
+to the browser. Point every run at the same file.
+
+Because of this, the token file holds a live secret and becomes the only copy
+once Wolt has replaced the original. Keep it out of Git and shared folders. Do
+not point two programs that run at the same time at one token file: whichever
+refreshes second will find its own token already replaced.
+
+If a run receives **HTTP 401**, the saved token has expired or was revoked. Put
+a current `__wrtoken` value in the token file, or delete the file and let the
+script ask again. The library cannot sign you in.
 
 The scripts exchange this refresh token for short-lived access tokens
 automatically; you never handle access tokens yourself. If you want to supply
@@ -240,10 +250,11 @@ To try **checkout without buying anything**, use the new checkout-only example
 from an editable source installation:
 
 ```bash
-python examples/order.py --latitude 60.17 --longitude 24.94 --query pizza
+python examples/order.py --latitude 60.17 --longitude 24.94 --query pizza \
+  --token-file ~/.wolt-token
 ```
 
-Use your own coordinates. It reads your refresh token as described in
+Use your own coordinates. It reads and saves your refresh token as described in
 [Get a token](#get-a-token), guides you through selecting an item and a saved
 delivery target/card, then asks before requesting a price. It never submits a
 purchase. Basket saving is off by default and needs a separate confirmation if

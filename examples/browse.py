@@ -8,6 +8,8 @@ import argparse
 import getpass
 import math
 import os
+import tempfile
+from pathlib import Path
 
 from woltapi import HTTPStatusError, RefreshTokenCredentials, WoltApiError, WoltClient
 
@@ -97,10 +99,20 @@ def positive_int(value):
     return number
 
 
+def check_token_file(parser, token_file):
+    """Fail early on an unusable token path, before any secret is typed."""
+    if token_file.exists():
+        if not token_file.is_file():
+            parser.error("--token-file must name a file.")
+    elif not token_file.parent.is_dir():
+        parser.error("The folder for --token-file does not exist.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--latitude", type=float, required=True)
     parser.add_argument("--longitude", type=float, required=True)
+    parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--query", default="pizza")
     parser.add_argument("--orders", type=positive_int, default=5)
     parser.add_argument("--menu-limit", type=positive_int, default=20)
@@ -114,9 +126,17 @@ def main():
         and -180 <= args.longitude <= 180
     ):
         parser.error("Provide finite latitude [-90, 90] and longitude [-180, 180].")
+    check_token_file(parser, args.token_file)
     try:
-        client = WoltClient(refresh_credentials(args.language))
+        client = WoltClient(refresh_credentials(args.language, args.token_file))
         browse(client, args)
+    except TokenFileError:
+        print(
+            "\nCould not save the refresh token to the token file."
+            " Wolt may have replaced it, so the stored value can be dead."
+            " Put a current __wrtoken value in the file."
+        )
+        return 1
     except HTTPStatusError as exc:
         print(
             f"\nRequest failed: {exc.service} HTTP {exc.status_code}. No retry was sent."
@@ -124,7 +144,7 @@ def main():
         if exc.status_code == 401:
             print(
                 "The refresh token may be expired or revoked."
-                " Copy a current __wrtoken cookie value from your browser."
+                " Put a current __wrtoken value in the token file."
             )
         return 1
     except (EOFError, OSError, UnicodeError, ValueError, WoltApiError) as exc:
@@ -133,47 +153,65 @@ def main():
     return 0
 
 
-def read_refresh_token():
+class TokenFileError(OSError):
+    """The refresh token could not be saved, so the stored value may be dead."""
+
+
+def write_refresh_token(token_file, token):
+    """Atomically persist a Wolt consumer refresh token with private permissions."""
+    temporary_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=token_file.parent,
+        prefix=f".{token_file.name}.",
+        delete=False,
+    )
+    temporary_path = Path(temporary_file.name)
+    replaced = False
+    try:
+        with temporary_file:
+            os.chmod(temporary_path, 0o600)
+            temporary_file.write(token)
+        os.replace(temporary_path, token_file)
+        replaced = True
+    except OSError:
+        raise TokenFileError from None
+    finally:
+        # Any failure, including KeyboardInterrupt, must not leave the token
+        # behind in a stray temporary file.
+        if not replaced:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def read_refresh_token(token_file):
     """Read the Wolt consumer refresh token (the __wrtoken cookie value)."""
-    token = os.environ.get("WOLT_REFRESH_TOKEN", "").strip()
+    try:
+        token = token_file.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        token = ""
     if not token:
         token = getpass.getpass("Wolt refresh token (hidden): ").strip()
-    if not token:
-        raise ValueError("A nonempty refresh token is required.")
+        if not token:
+            raise ValueError("A nonempty refresh token is required.")
+        write_refresh_token(token_file, token)
     return token
 
 
-def refresh_credentials(language):
-    """Build auto-refreshing credentials from WOLT_REFRESH_TOKEN or a prompt."""
-    token = read_refresh_token()
+def refresh_credentials(language, token_file):
+    """Build auto-refreshing credentials from a token file or hidden prompt."""
+    token = read_refresh_token(token_file)
 
     headers = {"app-language": language}
     return RefreshTokenCredentials(
         token,
-        on_refresh=rotation_warning(token),
+        on_refresh=lambda current_token: write_refresh_token(token_file, current_token),
         restaurant_headers=headers,
         consumer_headers=headers,
         payment_headers=headers,
     )
-
-
-def rotation_warning(initial_token):
-    """Build a callback that warns when the refresh token changes."""
-
-    seen_token = initial_token
-
-    def warn_on_rotation(new_token):
-        nonlocal seen_token
-        # The scripts cannot persist tokens; warn so a later failed run is
-        # explainable. The token value itself must never be printed.
-        if new_token != seen_token:
-            print(
-                "Note: Wolt replaced your refresh token. This script cannot"
-                " store it. If a later run fails, copy __wrtoken again."
-            )
-            seen_token = new_token
-
-    return warn_on_rotation
 
 
 if __name__ == "__main__":

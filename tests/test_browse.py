@@ -1,5 +1,4 @@
 import argparse
-import builtins
 import runpy
 from pathlib import Path
 
@@ -7,13 +6,19 @@ import pytest
 
 from woltapi import Venue
 
-from tests.test_client import FakeResponse, make_client
+from tests.test_client import FakeOpener, FakeResponse, make_client
 
 
 def load_script(monkeypatch):
     examples = Path(__file__).resolve().parents[1] / "examples"
     monkeypatch.syspath_prepend(str(examples))
     return runpy.run_path(str(examples / "browse.py"))
+
+
+def load_order_script(monkeypatch):
+    examples = Path(__file__).resolve().parents[1] / "examples"
+    monkeypatch.syspath_prepend(str(examples))
+    return runpy.run_path(str(examples / "order.py"))
 
 
 def test_order_history_route():
@@ -99,102 +104,191 @@ def test_no_search_results_does_not_fetch_menu(monkeypatch, capsys):
     assert "No venues found" in capsys.readouterr().out
 
 
-def test_refresh_token_from_environment_does_not_prompt(monkeypatch):
+def test_refresh_token_file_is_stripped_without_prompt(monkeypatch, tmp_path):
     script = load_script(monkeypatch)
-    monkeypatch.setenv("WOLT_REFRESH_TOKEN", " synthetic.token ")
+    token_file = tmp_path / "refresh-token"
+    token_file.write_text(" synthetic.token \n", encoding="utf-8")
 
     def unexpected_prompt(*args):
-        raise AssertionError("Environment token should prevent prompting")
+        raise AssertionError("Token file should prevent prompting")
 
     monkeypatch.setattr("getpass.getpass", unexpected_prompt)
-    assert script["read_refresh_token"]() == "synthetic.token"
+    assert script["read_refresh_token"](token_file) == "synthetic.token"
 
 
-def test_refresh_token_prompts_when_environment_missing(monkeypatch):
+@pytest.mark.parametrize("contents", [None, " \n"])
+def test_refresh_token_file_prompts_when_missing_or_blank(
+    monkeypatch, tmp_path, contents
+):
     script = load_script(monkeypatch)
-    monkeypatch.delenv("WOLT_REFRESH_TOKEN", raising=False)
+    token_file = tmp_path / "refresh-token"
+    if contents is not None:
+        token_file.write_text(contents, encoding="utf-8")
     monkeypatch.setattr("getpass.getpass", lambda prompt: " synthetic.token ")
-    assert script["read_refresh_token"]() == "synthetic.token"
+    assert script["read_refresh_token"](token_file) == "synthetic.token"
+    assert token_file.read_text(encoding="utf-8") == "synthetic.token"
+    assert token_file.stat().st_mode & 0o777 == 0o600
 
 
-def test_refresh_token_rejects_empty_prompt(monkeypatch):
+def test_refresh_token_file_rejects_empty_prompt(monkeypatch, tmp_path):
     script = load_script(monkeypatch)
-    monkeypatch.delenv("WOLT_REFRESH_TOKEN", raising=False)
+    token_file = tmp_path / "refresh-token"
     monkeypatch.setattr("getpass.getpass", lambda prompt: " ")
     with pytest.raises(ValueError):
-        script["read_refresh_token"]()
+        script["read_refresh_token"](token_file)
 
 
-def test_refresh_credentials_uses_environment_token(monkeypatch):
+def test_refresh_credentials_rejects_embedded_whitespace(monkeypatch, tmp_path):
     script = load_script(monkeypatch)
-    monkeypatch.setenv("WOLT_REFRESH_TOKEN", "synthetic.token")
-    credentials = script["refresh_credentials"]("en")
-    assert credentials.refresh_token == "synthetic.token"
+    token_file = tmp_path / "refresh-token"
+    token_file.write_text("synthetic\ttoken", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        script["refresh_credentials"]("en", token_file)
 
 
-def test_rotation_warning_is_silent_for_an_unchanged_token(monkeypatch, capsys):
+def test_refresh_credentials_persists_exchanged_token(monkeypatch, tmp_path, capsys):
     script = load_script(monkeypatch)
-    warning = script["rotation_warning"]("initial-synthetic-token")
+    token_file = tmp_path / "refresh-token"
+    token_file.write_text("initial-synthetic-token", encoding="utf-8")
+    opener = FakeOpener(
+        [
+            FakeResponse(
+                {
+                    "access_token": "access-synthetic-token",
+                    "refresh_token": "rotated-synthetic-token",
+                    "expires_in": 120,
+                    "token_type": "Bearer",
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr("woltapi.auth.urlrequest.build_opener", lambda *args: opener)
+    original_replace = script["os"].replace
 
-    warning("initial-synthetic-token")
+    def replace_in_token_directory(source, target):
+        assert Path(source).parent == token_file.parent
+        assert Path(target) == token_file
+        return original_replace(source, target)
 
+    monkeypatch.setattr(script["os"], "replace", replace_in_token_directory)
+
+    credentials = script["refresh_credentials"]("en", token_file)
+    credentials.refresh()
+
+    assert credentials.refresh_token == "rotated-synthetic-token"
+    assert token_file.read_text(encoding="utf-8") == "rotated-synthetic-token"
+    assert token_file.stat().st_mode & 0o777 == 0o600
     assert capsys.readouterr().out == ""
 
 
-def test_rotation_warning_warns_once_for_a_rotated_token(monkeypatch, capsys):
-    script = load_script(monkeypatch)
-    warning = script["rotation_warning"]("initial-synthetic-token")
-
-    warning("rotated-synthetic-token")
-    warning("rotated-synthetic-token")
-
-    assert capsys.readouterr().out == (
-        "Note: Wolt replaced your refresh token. This script cannot store it. "
-        "If a later run fails, copy __wrtoken again.\n"
-    )
-
-
-def test_rotation_warning_never_prints_tokens(monkeypatch, capsys):
+def test_refresh_credentials_propagates_token_file_write_failure(
+    monkeypatch, tmp_path, capsys
+):
     script = load_script(monkeypatch)
     initial_token = "initial-synthetic-token"
     rotated_token = "rotated-synthetic-token"
-    warning = script["rotation_warning"](initial_token)
+    token_file = tmp_path / "refresh-token"
+    token_file.write_text(initial_token, encoding="utf-8")
+    opener = FakeOpener(
+        [
+            FakeResponse(
+                {
+                    "access_token": "access-synthetic-token",
+                    "refresh_token": rotated_token,
+                    "expires_in": 120,
+                    "token_type": "Bearer",
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr("woltapi.auth.urlrequest.build_opener", lambda *args: opener)
 
-    warning(rotated_token)
+    def fail_replace(*args):
+        raise OSError
 
-    output = capsys.readouterr().out
-    assert initial_token not in output
-    assert rotated_token not in output
+    monkeypatch.setattr(script["os"], "replace", fail_replace)
+    credentials = script["refresh_credentials"]("en", token_file)
+
+    with pytest.raises(script["TokenFileError"]):
+        credentials.refresh()
+
+    assert token_file.read_text(encoding="utf-8") == initial_token
+    assert list(tmp_path.iterdir()) == [token_file]
+    captured = capsys.readouterr()
+    assert initial_token not in captured.out + captured.err
+    assert rotated_token not in captured.out + captured.err
 
 
-def test_rotation_warning_retries_after_a_print_failure(monkeypatch, capsys):
+def test_write_refresh_token_leaves_no_temporary_file(monkeypatch, tmp_path):
     script = load_script(monkeypatch)
-    warning = script["rotation_warning"]("initial-synthetic-token")
-    original_print = builtins.print
-    attempts = 0
+    token_file = tmp_path / "refresh-token"
 
-    def fail_once(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise BrokenPipeError
-        original_print(*args, **kwargs)
+    def interrupt(*args):
+        raise KeyboardInterrupt
 
-    monkeypatch.setattr("builtins.print", fail_once)
-    with pytest.raises(BrokenPipeError):
-        warning("rotated-synthetic-token")
+    monkeypatch.setattr(script["os"], "replace", interrupt)
 
-    warning("rotated-synthetic-token")
+    with pytest.raises(KeyboardInterrupt):
+        script["write_refresh_token"](token_file, "synthetic.token")
 
-    assert attempts == 2
-    assert capsys.readouterr().out == (
-        "Note: Wolt replaced your refresh token. This script cannot store it. "
-        "If a later run fails, copy __wrtoken again.\n"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "loader", [load_script, load_order_script], ids=["browse", "order"]
+)
+def test_examples_require_token_file(monkeypatch, capsys, loader):
+    script = loader(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["example.py", "--latitude", "1", "--longitude", "2"]
     )
 
+    with pytest.raises(SystemExit) as raised:
+        script["main"]()
 
-def test_refresh_credentials_rejects_embedded_whitespace(monkeypatch):
-    script = load_script(monkeypatch)
-    monkeypatch.setenv("WOLT_REFRESH_TOKEN", "synthetic\ttoken")
-    with pytest.raises(ValueError):
-        script["refresh_credentials"]("en")
+    assert raised.value.code == 2
+    assert "--token-file" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("path_kind", "message"),
+    [
+        ("missing-parent", "The folder for --token-file does not exist."),
+        ("directory", "--token-file must name a file."),
+    ],
+)
+@pytest.mark.parametrize(
+    "loader", [load_script, load_order_script], ids=["browse", "order"]
+)
+def test_examples_reject_unusable_token_files(
+    monkeypatch, tmp_path, capsys, path_kind, message, loader
+):
+    script = loader(monkeypatch)
+    if path_kind == "missing-parent":
+        token_file = tmp_path / "missing" / "refresh-token"
+    else:
+        token_file = tmp_path / "token-directory"
+        token_file.mkdir()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "example.py",
+            "--latitude",
+            "1",
+            "--longitude",
+            "2",
+            "--token-file",
+            str(token_file),
+        ],
+    )
+
+    def unexpected_prompt(*args):
+        raise AssertionError("Invalid token paths should fail before prompting")
+
+    monkeypatch.setattr("getpass.getpass", unexpected_prompt)
+    with pytest.raises(SystemExit) as raised:
+        script["main"]()
+
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
