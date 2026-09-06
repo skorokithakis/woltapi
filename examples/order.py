@@ -205,7 +205,9 @@ def checkout(client, args, context):
     if type(item_price) is not int:
         raise CheckoutInputError("Missing or invalid catalog item price.")
     count = number("Item quantity: ", 1)
-    options, option_names, option_amount = select_options(item, assortment, args.language)
+    options, option_names, option_amount = select_options(
+        item, assortment, args.language
+    )
     checkout_fields = fields(
         derive_checkout_fields(assortment, item),
         context.get("checkout_fields", {}),
