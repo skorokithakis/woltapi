@@ -243,6 +243,53 @@ Responses can contain personal information. Avoid printing entire responses or
 sending them to shared logs. The examples print saved addresses and card labels
 to the local terminal only. The browsing example prints only selected fields.
 
+### Baskets
+
+A basket is your list of chosen items at one restaurant. The `Basket` class
+builds that list locally, with no network requests. It reads names, option
+prices, and totals from the restaurant's menu, so you do not type any prices:
+
+```python
+from woltapi import Basket, OptionSelection, OptionValueSelection
+
+menu = client.get_assortment(restaurant.slug)
+basket = Basket(menu, "en")
+
+basket.add_item("<item id>", count=2)
+basket.add_item(
+    "<other item id>",
+    options=[
+        OptionSelection(
+            "<item option configuration id>", [OptionValueSelection("<value id>", 1)]
+        ),
+    ],
+)
+basket.set_count("<item id>", 1)
+basket.set_options("<item id>", [])
+basket.remove_item("<other item id>")
+
+items = basket.item_selections()
+```
+
+Item, option, and value IDs come from the assortment dictionary. For
+`OptionSelection`, use the configuration ID from the catalog item's own
+`options` list, not the root option ID from the assortment's top-level
+`options`. Pass the result of `item_selections()` to
+`client.create_selection(...)`, which validates the whole selection against the
+current menu.
+
+Wolt also stores one basket per restaurant on its servers. These are the
+baskets you see in the Wolt app. The library can read and replace them:
+
+| Call | What it does |
+| --- | --- |
+| `client.save_basket(selection)` | Replaces the server basket for that restaurant with your selection. This does not place an order. |
+| `client.get_basket_count()` | The number of baskets stored on the server. |
+| `client.get_venue_basket(venue_id)` | The server basket for one restaurant, or `None` if there is none. |
+| `client.get_baskets_page(latitude, longitude)` | The full baskets page as a dictionary. It can contain personal data; do not log it raw. |
+
+Deleting a server basket is not supported.
+
 ## Can it order food?
 
 Not as a simple, ready-to-use feature yet. There is no `order("pizza")` method.
@@ -256,23 +303,22 @@ python examples/order.py --latitude 60.17 --longitude 24.94 --query pizza \
 ```
 
 Use your own coordinates. It reads and saves your refresh token as described in
-[Get a token](#get-a-token), guides you through selecting an item and a saved
-delivery target/card, then asks before requesting a price. It never submits a
-purchase. Basket saving is off by default and needs a separate confirmation if
-enabled.
+[Get a token](#get-a-token), guides you through selecting one or more items with
+their options and a saved delivery target/card, then asks before requesting a
+price. Line totals come from the menu through the local basket builder; you do
+not type any amounts. It never submits a purchase. Basket saving is off by
+default and needs a separate confirmation if enabled.
 
-The checkout example derives `category_id`, `category_ids`, and the three
-checkout exclusion flags from the assortment, so those fields do not need a
-browser context file. It only supports items in exactly one category and stops
-rather than guessing for zero or multiple categories. If it stops, you can
-supply the missing values yourself with `--context-file <path>`, a JSON object
-whose `checkout_fields` entries were copied from your own browser's checkout
-request for the same item. It may still stop if other required catalog data is
-missing. Run `python examples/order.py --help` for available options.
+The basket builder derives `category_id`, `category_ids`, and the three checkout
+exclusion flags from the assortment. It only supports items in exactly one
+category and stops rather than guessing for zero or multiple categories. It may
+also stop if required catalog data is missing. Run
+`python examples/order.py --help` for available options.
 
-The library has methods to choose items, save a basket, ask Wolt for a price,
-and submit a purchase. But some required inputs still need to come from your
-own code, including browser/device information and detailed item data.
+The library has methods to build and manage a basket, save it, ask Wolt for a
+price, and submit a purchase. But some purchase inputs still need to come from
+your own code, including browser/device information and a few purchase-only
+item fields.
 
 Order-history and saved-address reads have worked in live checks. **Payment and
 purchase handling have not been verified with a real order.** The purchase code

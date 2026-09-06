@@ -1,6 +1,7 @@
 """Synchronous selection and explicit purchase client for observed Wolt hosts."""
 
 from .auth import RefreshTokenCredentials
+from .basket import Basket
 from .client import WoltClient
 from .credentials import SessionCredentials
 from .errors import (
@@ -50,6 +51,7 @@ from .transport import WoltTransport
 __all__ = [
     "DeliveryTarget",
     "DeliverySelection",
+    "Basket",
     "DuplicatePurchaseAttempt",
     "HTTPStatusError",
     "ItemSelection",

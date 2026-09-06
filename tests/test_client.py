@@ -65,6 +65,71 @@ def make_client(
 
 
 class WoltClientTests(unittest.TestCase):
+    def test_basket_reads_use_consumer_routes_and_preserve_raw_pages(self) -> None:
+        venue_basket = {"id": "basket-1", "venue_id": "venue-1", "items": []}
+        baskets_page = {"baskets": [venue_basket], "future_field": {"kept": True}}
+        client, opener = make_client(
+            FakeResponse({"count": 1}),
+            FakeResponse(venue_basket),
+            FakeResponse(baskets_page),
+        )
+
+        count = client.get_basket_count()
+        returned_venue_basket = client.get_venue_basket("venue-1")
+        returned_baskets_page = client.get_baskets_page(60.17, 24.94)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(returned_venue_basket, venue_basket)
+        self.assertEqual(returned_baskets_page, baskets_page)
+        routes = [urlsplit(request.full_url) for request in opener.requests]
+        self.assertEqual(
+            [(route.netloc, route.path) for route in routes],
+            [
+                ("consumer-api.wolt.com", "/order-xp/v1/baskets/count"),
+                ("consumer-api.wolt.com", "/order-xp/v1/baskets/venue"),
+                ("consumer-api.wolt.com", "/order-xp/web/v1/pages/baskets"),
+            ],
+        )
+        self.assertEqual(parse_qs(routes[1].query), {"venue_id": ["venue-1"]})
+        self.assertEqual(
+            parse_qs(routes[2].query), {"lat": ["60.17"], "lon": ["24.94"]}
+        )
+        for request in opener.requests:
+            headers = _headers(request)
+            self.assertEqual(headers["x-consumer-session"], "consumer-secret")
+            self.assertNotIn("x-restaurant-session", headers)
+
+    def test_get_venue_basket_returns_none_only_for_not_found(self) -> None:
+        not_found = HTTPError(
+            "https://consumer-api.wolt.com/order-xp/v1/baskets/venue",
+            404,
+            "not found",
+            None,
+            io.BytesIO(b"{}"),
+        )
+        client, _ = make_client(not_found)
+
+        self.assertIsNone(client.get_venue_basket("venue-1"))
+
+        server_error = HTTPError(
+            "https://consumer-api.wolt.com/order-xp/v1/baskets/venue",
+            500,
+            "server error",
+            None,
+            io.BytesIO(b"{}"),
+        )
+        client, _ = make_client(server_error)
+        with self.assertRaises(HTTPStatusError) as raised:
+            client.get_venue_basket("venue-1")
+        self.assertEqual(raised.exception.status_code, 500)
+
+    def test_get_basket_count_rejects_non_integer_counts(self) -> None:
+        for payload in ({}, {"count": True}, {"count": "1"}):
+            with self.subTest(payload=payload):
+                client, _ = make_client(FakeResponse(payload))
+                with self.assertRaises(ResponseShapeError):
+                    client.get_basket_count()
+
     def test_documented_routes_use_the_correct_hosts_and_preserve_catalog_data(
         self,
     ) -> None:

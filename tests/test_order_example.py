@@ -1,5 +1,6 @@
 import argparse
 import builtins
+from copy import deepcopy
 import json
 import runpy
 from dataclasses import replace
@@ -32,13 +33,14 @@ def setup_checkout(
     final_answer="QUOTE",
     configure_catalog=None,
     input_answers=None,
+    multiple_items=False,
 ):
     assortment, venue, delivery, _, item = selection_inputs()
     catalog = assortment["items"][0]
-    catalog["name"] = "Synthetic pizza"
+    catalog["name"] = [{"lang": "en", "value": "Synthetic pizza"}]
     payment_fields = {
-        k: item.post_checkout_fields[k]
-        for k in (
+        name: item.post_checkout_fields[name]
+        for name in (
             "product_hierarchy_tags",
             "vat_percentage",
             "vat_percentage_decimal",
@@ -51,6 +53,19 @@ def setup_checkout(
     ]
     if configure_catalog is not None:
         configure_catalog(assortment, catalog)
+    if multiple_items:
+        salad = deepcopy(catalog)
+        salad.update(
+            {
+                "id": "item-2",
+                "name": [{"lang": "en", "value": "Synthetic salad"}],
+                "price": 500,
+                "checksum": "catalog-checksum-2",
+                "options": [],
+            }
+        )
+        assortment["items"].append(salad)
+        assortment["categories"].append({"id": "category-2", "item_ids": ["item-2"]})
     responses = [
         {
             "sections": [
@@ -111,21 +126,13 @@ def setup_checkout(
             }
         },
     ]
-    answers = (
+    answers = list(
         input_answers
         if input_answers is not None
-        else [
-            "1",
-            "1",
-            "1",
-            "1",
-            "YES",
-            "0",
-            "1",
-            "YES",
-            "1",
-        ]
+        else ["1", "1", "1", "1", "no", "0", "1", "YES", "1"]
     )
+    if multiple_items and input_answers is None:
+        answers = ["1", "1", "1", "1", "YES", "2", "2", "no", "0", "1", "YES", "1"]
     if save_basket:
         responses.append({"id": "basket-1", "venue_id": venue.id})
         answers.append("SAVE BASKET")
@@ -163,8 +170,13 @@ def setup_checkout(
 def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_basket):
     example = load_example(monkeypatch)
     client, args, opener = setup_checkout(monkeypatch, save_basket=save_basket)
+
     example["checkout"](client, args, {})
-    routes = [(r.get_method(), urlsplit(r.full_url).path) for r in opener.requests]
+
+    routes = [
+        (request.get_method(), urlsplit(request.full_url).path)
+        for request in opener.requests
+    ]
     assert routes == [
         ("POST", "/v1/pages/search"),
         ("GET", "/order-xp/web/v1/pages/venue/slug/test-restaurant/static"),
@@ -194,6 +206,7 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
     for expected in (
         "31.00 EUR",
         "27.00 EUR",
+        "Catalog-derived line total: 27.00 EUR",
         "Extra cheese",
         "Example home",
         "1 Example Street",
@@ -215,28 +228,28 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
         assert private not in output
 
 
+def test_checkout_adds_multiple_catalog_priced_items(monkeypatch, capsys):
+    example = load_example(monkeypatch)
+    client, args, opener = setup_checkout(monkeypatch, multiple_items=True)
+
+    example["checkout"](client, args, {})
+
+    payment_context = json.loads(opener.requests[4].data)
+    assert [item["id"] for item in payment_context["items"]] == ["item-1", "item-2"]
+    plan = json.loads(opener.requests[-1].data)["purchase_plan"]
+    assert [
+        (item["id"], item["count"], item["end_amount"]) for item in plan["menu_items"]
+    ] == [("item-1", 1, 2700), ("item-2", 2, 1000)]
+    assert "2 x Synthetic salad" in capsys.readouterr().out
+
+
 def test_cancel_before_quote(monkeypatch):
     example = load_example(monkeypatch)
     client, args, opener = setup_checkout(monkeypatch, final_answer="no")
+
     example["checkout"](client, args, {})
+
     assert len(opener.requests) == 5
-
-
-def test_declining_computed_price_stops_before_delivery_card_and_quote(monkeypatch):
-    example = load_example(monkeypatch)
-    client, args, opener = setup_checkout(
-        monkeypatch,
-        input_answers=["1", "1", "1", "1", "no"],
-    )
-    example["checkout"](client, args, {})
-    assert [(r.get_method(), urlsplit(r.full_url).path) for r in opener.requests] == [
-        ("POST", "/v1/pages/search"),
-        ("GET", "/order-xp/web/v1/pages/venue/slug/test-restaurant/static"),
-        (
-            "GET",
-            "/consumer-api/consumer-assortment/v1/venues/slug/test-restaurant/assortment",
-        ),
-    ]
 
 
 def test_basket_flag_still_needs_explicit_confirmation(monkeypatch):
@@ -247,7 +260,9 @@ def test_basket_flag_still_needs_explicit_confirmation(monkeypatch):
         "builtins.input",
         lambda prompt: "no" if "SAVE BASKET" in prompt else original(prompt),
     )
+
     example["checkout"](client, args, {})
+
     assert len(opener.requests) == 5
 
 
@@ -256,47 +271,11 @@ def test_invalid_option_count_stops_before_card_and_quote(monkeypatch):
     client, args, opener = setup_checkout(monkeypatch)
     answers = iter(["1", "1", "1", "0"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
     with pytest.raises(example["CheckoutInputError"], match="catalog limits"):
         example["checkout"](client, args, {})
+
     assert len(opener.requests) == 3
-
-
-@pytest.mark.parametrize("price", [None, "700"])
-def test_selected_option_price_must_be_an_integer(monkeypatch, price):
-    example = load_example(monkeypatch)
-    item = {
-        "options": [
-            {
-                "id": "item-config-1",
-                "option_id": "option-1",
-                "prerequisite_values": [],
-                "multi_choice_config": {
-                    "total_range": {"min": 1, "max": 1},
-                    "max_single_selections": 1,
-                    "free_selections": 0,
-                },
-            }
-        ]
-    }
-    assortment = {
-        "options": [
-            {
-                "id": "option-1",
-                "type": "choice",
-                "name": [{"lang": "en", "value": "Toppings"}],
-                "values": [
-                    {
-                        "id": "value-1",
-                        "name": [{"lang": "en", "value": "Extra cheese"}],
-                        **({"price": price} if price is not None else {}),
-                    }
-                ],
-            }
-        ]
-    }
-    monkeypatch.setattr("builtins.input", lambda prompt: "1")
-    with pytest.raises(example["CheckoutInputError"], match="option value price"):
-        example["select_options"](item, assortment, "en")
 
 
 def test_empty_option_count_selects_no_value(monkeypatch):
@@ -332,11 +311,12 @@ def test_empty_option_count_selects_no_value(monkeypatch):
         ]
     }
     monkeypatch.setattr("builtins.input", lambda prompt: "")
-    assert example["select_options"](item, assortment, "en") == ([], [], 0)
+
+    assert example["select_options"](item, assortment, "en") == ([], [])
 
 
 @pytest.mark.parametrize("price", [None, "2000"])
-def test_catalog_item_price_must_be_an_integer(monkeypatch, price):
+def test_invalid_catalog_item_price_stops_before_card_and_quote(monkeypatch, price):
     example = load_example(monkeypatch)
 
     def configure_catalog(_, catalog):
@@ -348,14 +328,15 @@ def test_catalog_item_price_must_be_an_integer(monkeypatch, price):
     client, args, opener = setup_checkout(
         monkeypatch,
         configure_catalog=configure_catalog,
-        input_answers=["1", "1"],
+        input_answers=["1", "1", "1", "1"],
     )
-    with pytest.raises(example["CheckoutInputError"], match="catalog item price"):
+    with pytest.raises(SelectionError, match="Catalog prices"):
         example["checkout"](client, args, {})
+
     assert len(opener.requests) == 3
 
 
-def test_configured_unit_price_is_not_multiplied_by_item_quantity(monkeypatch):
+def test_basket_derived_line_total_includes_quantity_and_options(monkeypatch):
     example = load_example(monkeypatch)
 
     def configure_catalog(assortment, _):
@@ -377,7 +358,7 @@ def test_configured_unit_price_is_not_multiplied_by_item_quantity(monkeypatch):
             "2",
             "2",
             "1",
-            "YES",
+            "no",
             "0",
             "1",
             "YES",
@@ -386,38 +367,41 @@ def test_configured_unit_price_is_not_multiplied_by_item_quantity(monkeypatch):
             "QUOTE",
         ],
     )
+
     example["checkout"](client, args, {})
+
     basket = json.loads(opener.requests[-2].data)
     checkout = json.loads(opener.requests[-1].data)["purchase_plan"]
     assert basket["items"][0]["count"] == 2
-    assert basket["items"][0]["price"] == 3700
+    assert basket["items"][0]["price"] == 7400
     assert checkout["menu_items"][0]["count"] == 2
-    assert checkout["menu_items"][0]["end_amount"] == 3700
+    assert checkout["menu_items"][0]["end_amount"] == 7400
 
 
-def test_missing_metadata_does_not_invent_values(monkeypatch):
+def test_missing_venue_metadata_does_not_invent_values(monkeypatch):
     example = load_example(monkeypatch)
-    with pytest.raises(
-        example["CheckoutInputError"], match="Missing payment_fields: vat_percentage"
-    ):
-        example["fields"]({}, {}, ("vat_percentage",), "payment_fields")
+    with pytest.raises(example["CheckoutInputError"], match="Missing venue: currency"):
+        example["fields"]({}, {}, ("currency",), "venue")
     with pytest.raises(example["CheckoutInputError"], match="conflicts"):
         example["fields"](
-            {"vat_percentage": 0},
-            {"vat_percentage": 5},
-            ("vat_percentage",),
-            "payment_fields",
+            {"currency": "EUR"},
+            {"currency": "USD"},
+            ("currency",),
+            "venue",
         )
 
 
-def test_context_must_match_selected_item(monkeypatch):
+@pytest.mark.parametrize(
+    "context", [{"venue_id": "another-venue"}, {"venue": {"currency": "EUR"}}]
+)
+def test_nonempty_context_venue_must_match_selected_venue(monkeypatch, context):
     example = load_example(monkeypatch)
     client, args, opener = setup_checkout(monkeypatch)
-    with pytest.raises(example["CheckoutInputError"], match="must match"):
-        example["checkout"](
-            client, args, {"venue_id": "venue-1", "item_id": "another-item"}
-        )
-    assert len(opener.requests) == 3
+
+    with pytest.raises(example["CheckoutInputError"], match="venue_id must match"):
+        example["checkout"](client, args, context)
+
+    assert len(opener.requests) == 2
 
 
 def test_quote_only_tax_fields_do_not_require_purchase_context():
@@ -433,8 +417,8 @@ def test_quote_only_tax_fields_do_not_require_purchase_context():
     )
     assortment, venue, delivery, payment_method, item = selection_inputs()
     tax = {
-        k: item.post_checkout_fields[k]
-        for k in (
+        name: item.post_checkout_fields[name]
+        for name in (
             "product_hierarchy_tags",
             "vat_percentage",
             "vat_percentage_decimal",

@@ -753,13 +753,7 @@ def _serialize_basket_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "count": item["count"],
         "name": item["basket_name"],
         "price": item["basket_price"],
-        "options": [
-            {
-                "id": option["configuration_id"],
-                "values": deepcopy(option["values"]),
-            }
-            for option in item["options"]
-        ],
+        "options": _serialize_item_options(item),
         "substitution_settings": {"is_allowed": item["substitution_allowed"]},
     }
 
@@ -770,18 +764,33 @@ def _serialize_checkout_item(item: Mapping[str, Any]) -> dict[str, Any]:
         {
             "id": item["id"],
             "count": item["count"],
-            "options": [
-                {
-                    "id": option["configuration_id"],
-                    "values": deepcopy(option["values"]),
-                }
-                for option in item["options"]
-            ],
+            "options": _serialize_item_options(item),
             "base_price": item["base_price"],
             "end_amount": item["end_amount"],
         }
     )
     return payload
+
+
+def _serialize_item_options(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Serialize every catalog configuration, retaining selected value order."""
+
+    selected_values = {
+        option["configuration_id"]: option["values"] for option in item["options"]
+    }
+    return [
+        {
+            "id": configuration["id"],
+            "values": [
+                deepcopy(value)
+                for value in selected_values.get(configuration["id"], [])
+                if isinstance(value, Mapping) and _is_nonempty_text(value.get("id"))
+            ],
+        }
+        for configuration in item["catalog"]["item"]["options"]
+        if isinstance(configuration, Mapping)
+        and _is_nonempty_text(configuration.get("id"))
+    ]
 
 
 def _serialize_post_checkout_item(item: Mapping[str, Any]) -> dict[str, Any]:

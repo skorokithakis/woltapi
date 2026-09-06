@@ -9,15 +9,14 @@ from pathlib import Path
 from browse import TokenFileError, check_token_file, refresh_credentials, text
 
 from woltapi import (
+    Basket,
     DeliverySelection,
     HTTPStatusError,
-    ItemSelection,
     OptionSelection,
     OptionValueSelection,
     VenueCheckoutContext,
     WoltApiError,
     WoltClient,
-    derive_checkout_fields,
 )
 
 
@@ -101,7 +100,6 @@ def select_options(item, assortment, language):
         raise CheckoutInputError("Missing catalog option lists.")
     selected = []
     descriptions = []
-    option_amount = 0
     for config in configurations:
         if not isinstance(config, dict) or config.get("prerequisite_values") != []:
             raise CheckoutInputError(
@@ -145,19 +143,13 @@ def select_options(item, assortment, language):
                 f"Count for {name} (0 to {single}): ", 0, single, empty_value=0
             )
             if count:
-                price = value.get("price")
-                if type(price) is not int:
-                    raise CheckoutInputError(
-                        "Missing or invalid catalog option value price."
-                    )
                 selections.append(OptionValueSelection(value["id"], count))
                 descriptions.append(f"{count} x {name}")
-                option_amount += price * count
         if not low <= sum(v.count for v in selections) <= high:
             raise CheckoutInputError("Selected options do not meet the catalog limits.")
         if selections:
             selected.append(OptionSelection(config["id"], selections))
-    return selected, descriptions, option_amount
+    return selected, descriptions
 
 
 def checkout(client, args, context):
@@ -168,6 +160,8 @@ def checkout(client, args, context):
         raise CheckoutInputError(
             "Static venue response does not match the selected restaurant."
         )
+    if context and context.get("venue_id") != venue.id:
+        raise CheckoutInputError("Context venue_id must match the selected restaurant.")
     venue_fields = fields(
         static,
         context.get("venue", {}),
@@ -185,60 +179,32 @@ def checkout(client, args, context):
         isinstance(i, dict) for i in catalog_items
     ):
         raise CheckoutInputError("Missing assortment items.")
-    item = choose(
-        "menu item",
-        catalog_items,
-        lambda i: f"{text(i.get('name'), args.language)} | {money(i.get('price'), currency)}",
-    )
-    if context and (
-        context.get("venue_id") != venue.id or context.get("item_id") != item.get("id")
-    ):
-        raise CheckoutInputError(
-            "Context venue_id and item_id must match the selected restaurant and item."
+    basket = Basket(assortment, args.language)
+    selected_items = []
+    while True:
+        item = choose(
+            "menu item",
+            catalog_items,
+            lambda i: f"{text(i.get('name'), args.language)} | {money(i.get('price'), currency)}",
         )
-    if item.get("restrictions") != []:
-        raise CheckoutInputError("Restricted items are unsupported.")
-    methods = item.get("allowed_delivery_methods")
-    if not isinstance(methods, list) or "homedelivery" not in methods:
-        raise CheckoutInputError("This item does not explicitly support home delivery.")
-    item_price = item.get("price")
-    if type(item_price) is not int:
-        raise CheckoutInputError("Missing or invalid catalog item price.")
-    count = number("Item quantity: ", 1)
-    options, option_names, option_amount = select_options(
-        item, assortment, args.language
-    )
-    checkout_fields = fields(
-        derive_checkout_fields(assortment, item),
-        context.get("checkout_fields", {}),
-        (
-            "category_id",
-            "category_ids",
-            "exclude_from_credits",
-            "exclude_from_discounts",
-            "exclude_from_discounts_min_basket",
-            "alcohol_permille",
-            "restrictions",
-        ),
-        "checkout_fields",
-    )
-    if checkout_fields["alcohol_permille"] != 0:
-        raise CheckoutInputError("Age-restricted items are unsupported.")
-    payment_fields = fields(
-        item,
-        context.get("payment_fields", {}),
-        (
-            "product_hierarchy_tags",
-            "vat_percentage",
-            "vat_percentage_decimal",
-        ),
-        "payment_fields",
-    )
-    unit_amount = item_price + option_amount
-    print(f"Computed configured unit price: {money(unit_amount, currency)}")
-    if input("Does this match the Wolt UI? Type YES: ").strip() != "YES":
-        print("Cancelled before card lookup or quote.")
-        return
+        if item.get("restrictions") != []:
+            raise CheckoutInputError("Restricted items are unsupported.")
+        methods = item.get("allowed_delivery_methods")
+        if not isinstance(methods, list) or "homedelivery" not in methods:
+            raise CheckoutInputError(
+                "This item does not explicitly support home delivery."
+            )
+        count = number("Item quantity: ", 1)
+        options, option_names = select_options(item, assortment, args.language)
+        basket.add_item(item["id"], count, options)
+        selected_item = basket.contents[item["id"]]
+        if selected_item.checkout_fields["alcohol_permille"] != 0:
+            raise CheckoutInputError("Age-restricted items are unsupported.")
+        selected_items.append((selected_item, option_names))
+        if input("Add another menu item? Type YES: ").strip() != "YES":
+            break
+
+    item_selections = basket.item_selections()
     tip = number("Courier tip in cents (0 for none): ")
     delivery = choose(
         "saved delivery target", client.list_delivery_targets(), delivery_description
@@ -257,10 +223,11 @@ def checkout(client, args, context):
         "available_methods": ["card"],
         "items": [
             {
-                "id": item["id"],
-                "alcohol_permille": checkout_fields["alcohol_permille"],
-                **payment_fields,
+                "id": item.id,
+                "alcohol_permille": item.checkout_fields["alcohol_permille"],
+                **item.payment_fields,
             }
+            for item in item_selections
         ],
     }
     card = choose(
@@ -268,31 +235,24 @@ def checkout(client, args, context):
         client.get_payment_methods(card_context),
         card_description,
     )
-    selected_item = ItemSelection(
-        id=item["id"],
-        count=count,
-        basket_name=text(item.get("name"), args.language),
-        basket_price=unit_amount,
-        end_amount=unit_amount,
-        substitution_allowed=False,
-        checkout_fields=checkout_fields,
-        options=options,
-        payment_fields=payment_fields,
-    )
     selection = client.create_selection(
         assortment,
         venue=VenueCheckoutContext(id=venue.id, preorder_config=None, **venue_fields),
         delivery=DeliverySelection(delivery.id, args.latitude, args.longitude),
         payment_method={"id": card.id, "type": card.type},
         courier_tip=tip,
-        items=[selected_item],
+        items=item_selections,
     )
-    print(
-        f"\n{count} x {selected_item.basket_name} at {text(venue.title or venue.slug)}"
-    )
-    for name in option_names:
-        print(f"  Option: {name}")
-    print(f"Configured unit price: {money(unit_amount, currency)}")
+    for selected_item, option_names in selected_items:
+        print(
+            f"\n{selected_item.count} x {selected_item.basket_name} "
+            f"at {text(venue.title or venue.slug)}"
+        )
+        for name in option_names:
+            print(f"  Option: {name}")
+        print(
+            f"Catalog-derived line total: {money(selected_item.basket_price, currency)}"
+        )
     print(
         f"Delivery: {delivery_description(delivery)} | Card: {card_description(card)}"
     )
@@ -360,7 +320,7 @@ def main():
     parser.add_argument(
         "--context-file",
         type=Path,
-        help="Optional current browser metadata for fields missing from the catalog",
+        help="Optional current browser metadata for venue fields missing from static data",
     )
     parser.add_argument(
         "--save-basket",

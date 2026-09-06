@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .credentials import SessionCredentials
-from .errors import ResponseShapeError, SelectionError
+from .errors import HTTPStatusError, ResponseShapeError, SelectionError
 from .models import DeliveryTarget, OrderStatus, PaymentMethod, Venue
 from .purchase import (
     PurchaseAttemptStore,
@@ -116,6 +116,52 @@ class WoltClient:
             ServiceHost.CONSUMER,
             "GET",
             "/order-xp/web/v1/pages/orders",
+        )
+
+    def get_basket_count(self) -> int:
+        """Return the number of server baskets."""
+
+        response = self._transport.request(
+            ServiceHost.CONSUMER,
+            "GET",
+            "/order-xp/v1/baskets/count",
+        )
+        count = response.get("count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ResponseShapeError(ServiceHost.CONSUMER.value)
+        return count
+
+    def get_venue_basket(self, venue_id: str) -> dict[str, Any] | None:
+        """Read a venue's server basket, returning ``None`` when it is absent."""
+
+        venue_id = _required_text(venue_id, "venue_id")
+        try:
+            return self._transport.request(
+                ServiceHost.CONSUMER,
+                "GET",
+                "/order-xp/v1/baskets/venue",
+                query={"venue_id": venue_id},
+            )
+        except HTTPStatusError as error:
+            if error.status_code == 404:
+                return None
+            raise
+
+    def get_baskets_page(
+        self, latitude: int | float, longitude: int | float
+    ) -> dict[str, Any]:
+        """Read the current saved-basket page in server-provided order.
+
+        The detached page can contain private basket data. Do not log it raw.
+        """
+
+        latitude = _coordinate(latitude, "latitude")
+        longitude = _coordinate(longitude, "longitude")
+        return self._transport.request(
+            ServiceHost.CONSUMER,
+            "GET",
+            "/order-xp/web/v1/pages/baskets",
+            query={"lat": latitude, "lon": longitude},
         )
 
     def get_venue_static(self, venue_slug: str) -> dict[str, Any]:
@@ -330,7 +376,10 @@ class WoltClient:
         return selection
 
     def save_basket(self, selection: OrderSelection) -> SavedBasket:
-        """Persist a basket explicitly; this mutation does not place an order."""
+        """Explicitly upsert a per-venue basket, replacing the whole server basket.
+
+        This mutation does not place an order.
+        """
 
         selection = _order_selection(selection)
         response = self._transport.request(

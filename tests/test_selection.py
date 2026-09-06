@@ -312,6 +312,99 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(post_item["options"][0]["id"], "item-config-1")
         self.assertEqual(post_item["options"][0]["values"], {"value-1": 3})
 
+    def test_basket_and_checkout_include_unselected_options_in_catalog_order(
+        self,
+    ) -> None:
+        client, _ = make_discovered_client()
+        assortment, venue, delivery, payment_method, item = selection_inputs()
+        assortment["items"][0]["options"].insert(
+            0,
+            {
+                "id": "item-config-2",
+                "option_id": "root-option-2",
+                "prerequisite_values": [],
+                "multi_choice_config": {
+                    "total_range": {"min": 0, "max": 1},
+                    "max_single_selections": 1,
+                    "free_selections": 0,
+                },
+            },
+        )
+        assortment["options"].append(
+            {
+                "id": "root-option-2",
+                "type": "choice",
+                "values": [{"id": "value-2", "price": 100}],
+            }
+        )
+
+        selection = client.create_selection(
+            assortment,
+            venue=venue,
+            delivery=delivery,
+            payment_method=payment_method,
+            courier_tip=0,
+            items=[item],
+        )
+
+        expected_options = [
+            {"id": "item-config-2", "values": []},
+            {
+                "id": "item-config-1",
+                "values": [{"id": "value-1", "count": 3, "price": 700}],
+            },
+        ]
+        self.assertEqual(
+            selection.to_basket_payload()["items"][0]["options"], expected_options
+        )
+        self.assertEqual(
+            selection.to_checkout_payload()["purchase_plan"]["menu_items"][0][
+                "options"
+            ],
+            expected_options,
+        )
+        self.assertEqual(
+            selection.to_post_checkout_payload()["basket"][0]["options"],
+            [
+                {
+                    "type": "Choice",
+                    "name": [{"value": "Synthetic option", "lang": "en"}],
+                    "id": "item-config-1",
+                    "values": {"value-1": 3},
+                }
+            ],
+        )
+
+    def test_serializers_skip_malformed_catalog_configurations(self) -> None:
+        client, _ = make_discovered_client()
+        assortment, venue, delivery, payment_method, item = selection_inputs()
+        assortment["items"][0]["options"].insert(0, {"option_id": "root-option-1"})
+
+        selection = client.create_selection(
+            assortment,
+            venue=venue,
+            delivery=delivery,
+            payment_method=payment_method,
+            courier_tip=0,
+            items=[item],
+        )
+
+        expected_options = [
+            {
+                "id": "item-config-1",
+                "values": [{"id": "value-1", "count": 3, "price": 700}],
+            }
+        ]
+        self.assertEqual(
+            selection.to_basket_payload()["items"][0]["options"], expected_options
+        )
+        self.assertEqual(
+            selection.to_checkout_payload()["purchase_plan"]["menu_items"][0][
+                "options"
+            ],
+            expected_options,
+        )
+
     def test_explicit_basket_quote_and_consent_requests_capture_independent_snapshots(
         self,
     ) -> None:
