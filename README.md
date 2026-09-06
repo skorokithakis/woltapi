@@ -225,6 +225,7 @@ longer use this path; prefer `RefreshTokenCredentials`.
 | `client.get_venue_dynamic(slug, latitude, longitude)` | Current opening and delivery information. |
 | `client.get_orders_page()` | A dictionary containing the current page of order history. |
 | `client.list_delivery_targets()` | References to your saved delivery addresses, with saved labels and address details. |
+| `client.get_venue_checkout_context(slug)` | The `VenueCheckoutContext` for a restaurant, read from its static page. Needed for `create_selection` and `save_basket_items`. |
 | `client.get_order_status(purchase_id)` | An order's status and some price information. |
 | `derive_checkout_fields(assortment, item)` | The checkout metadata fields for one menu item, derived from the assortment. Raises an error for items in zero or multiple categories. |
 
@@ -333,11 +334,13 @@ values read back from the server carry no price; this does not matter, because
 `Basket` recomputes every price from the menu you pass in. Substitution
 settings are restored as saved.
 
-Two caveats:
+Three caveats:
 
 - The rebuild raises `SelectionError` naming the item ID when a saved item is
   no longer on the restaurant's menu. Remove that item from the saved data or
   start a fresh `Basket`.
+- The rebuild raises `ResponseShapeError` when a saved basket entry does not
+  match the shape the server has been observed to return.
 - A save sends only the restaurant, the currency, and the items. A customer
   comment attached to the basket in the Wolt app may not survive a save.
 
