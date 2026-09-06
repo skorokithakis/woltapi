@@ -280,7 +280,8 @@ Item, option, and value IDs come from the assortment dictionary. For
 current menu.
 
 Wolt also stores one basket per restaurant on its servers. These are the
-baskets you see in the Wolt app. The library can read and replace them:
+baskets you see in the Wolt app. The library can read, replace, and delete
+them:
 
 | Call | What it does |
 | --- | --- |
@@ -288,6 +289,7 @@ baskets you see in the Wolt app. The library can read and replace them:
 | `client.save_basket(selection)` | Also replaces the whole server basket, but takes a full `OrderSelection`. |
 | `client.get_basket_count()` | The number of baskets stored on the server. |
 | `client.get_baskets_page(latitude, longitude)` | The full baskets page as a dictionary. It can contain personal data; do not log it raw. |
+| `client.delete_baskets(basket_ids)` | Deletes the listed server baskets. |
 | `client.get_venue_checkout_context(slug)` | The `VenueCheckoutContext` for a restaurant, read from its static page. |
 
 There are two ways to save. `save_basket_items()` needs no saved address and no
@@ -297,8 +299,28 @@ after `list_delivery_targets()` and `get_payment_methods()` on the same client,
 so it needs a saved delivery address and an enabled card. That cost is worth
 paying only when you go on to request a checkout quote with the same selection.
 
-Deleting a server basket is not supported. There is also no call that adds or
-removes a single item: every save replaces the whole basket.
+There is no call that adds or removes a single item: every save replaces the
+whole basket.
+
+#### Delete a saved basket
+
+`delete_baskets()` takes a list of basket IDs and deletes all of them in one
+call. You get a basket ID from `get_baskets_page()`, or from the `SavedBasket`
+that `save_basket()` and `save_basket_items()` return.
+
+```python
+page = client.get_baskets_page(60.17, 24.94)
+ids = [
+    entry["id"] for entry in page["baskets"]
+    if entry["venue"]["slug"] == "<restaurant slug>"
+]
+client.delete_baskets(ids)
+```
+
+Wolt sends nothing back, so the call cannot tell you whether the baskets were
+really there or whether anything was deleted. If you need to be sure, read
+`get_basket_count()` or `get_baskets_page()` again afterwards. An empty list is
+rejected, because Wolt's behaviour in that case has never been observed.
 
 #### Change a saved basket
 

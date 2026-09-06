@@ -74,6 +74,7 @@ class WoltTransport:
         *,
         query: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
+        expect_response_body: bool = True,
     ) -> dict[str, Any]:
         """Make one JSON request to a fixed host without retries or redirects."""
 
@@ -87,6 +88,8 @@ class WoltTransport:
             raise TypeError("query must be a mapping when provided.")
         if json_body is not None and not isinstance(json_body, Mapping):
             raise TypeError("json_body must be a mapping when provided.")
+        if not isinstance(expect_response_body, bool):
+            raise TypeError("expect_response_body must be a bool.")
 
         data = _encode_json(json_body, service) if json_body is not None else None
         headers = _request_headers(
@@ -116,6 +119,8 @@ class WoltTransport:
 
         if not 200 <= status_code < 300:
             raise HTTPStatusError(service.value, status_code)
+        if not expect_response_body:
+            return {}
         return _decode_json_object(response_body, service)
 
 

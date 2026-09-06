@@ -149,6 +149,22 @@ class WoltClient:
             query={"lat": latitude, "lon": longitude},
         )
 
+    def delete_baskets(self, basket_ids: Sequence[str]) -> None:
+        """Delete server baskets without confirmation from the response.
+
+        The response carries no result, so a caller who wants to confirm must
+        re-read get_basket_count() or get_baskets_page().
+        """
+
+        basket_ids = _basket_ids(basket_ids)
+        self._transport.request(
+            ServiceHost.CONSUMER,
+            "POST",
+            "/order-xp/v1/baskets/bulk/delete",
+            json_body={"ids": basket_ids},
+            expect_response_body=False,
+        )
+
     def get_venue_static(self, venue_slug: str) -> dict[str, Any]:
         """Read the static venue page for a slug."""
 
@@ -544,6 +560,14 @@ def _required_text(value: object, name: str) -> str:
     if not _is_nonempty_string(value):
         raise ValueError(f"{name} must be a non-empty string.")
     return value
+
+
+def _basket_ids(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError("basket_ids must be a sequence.")
+    if not value:
+        raise ValueError("basket_ids must not be empty.")
+    return [_required_text(basket_id, "basket ID") for basket_id in value]
 
 
 def _path_segment(value: object, name: str) -> str:

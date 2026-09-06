@@ -17,6 +17,7 @@ from woltapi import (
     WoltClient,
     WoltTransport,
 )
+from woltapi.services import ServiceHost
 
 
 class FakeResponse:
@@ -260,6 +261,52 @@ class WoltClientTests(unittest.TestCase):
             headers = _headers(request)
             self.assertEqual(headers["x-consumer-session"], "consumer-secret")
             self.assertNotIn("x-restaurant-session", headers)
+
+    def test_delete_baskets_posts_ids_and_accepts_null_response(self) -> None:
+        client, opener = make_client(FakeResponse(None))
+
+        result = client.delete_baskets(["basket-1", "basket-2"])
+
+        self.assertIsNone(result)
+        self.assertEqual(len(opener.requests), 1)
+        request = opener.requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(urlsplit(request.full_url).netloc, "consumer-api.wolt.com")
+        self.assertEqual(
+            urlsplit(request.full_url).path,
+            "/order-xp/v1/baskets/bulk/delete",
+        )
+        headers = _headers(request)
+        self.assertEqual(headers["x-consumer-session"], "consumer-secret")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")), {"ids": ["basket-1", "basket-2"]}
+        )
+
+    def test_transport_rejects_null_body_when_response_is_expected(self) -> None:
+        client, _ = make_client(FakeResponse(None))
+
+        with self.assertRaises(ResponseShapeError):
+            client._transport.request(
+                ServiceHost.CONSUMER, "POST", "/order-xp/v1/baskets/bulk/delete"
+            )
+
+    def test_delete_baskets_validates_ids_before_request(self) -> None:
+        for basket_ids, error_type in (
+            ([], ValueError),
+            ("basket-1", TypeError),
+            (None, TypeError),
+            (1, TypeError),
+            (b"basket-1", TypeError),
+            ([1], ValueError),
+            (["  "], ValueError),
+        ):
+            with self.subTest(basket_ids=basket_ids):
+                client, opener = make_client()
+
+                with self.assertRaises(error_type):
+                    client.delete_baskets(basket_ids)  # type: ignore[arg-type]
+
+                self.assertEqual(opener.requests, [])
 
     def test_get_basket_count_rejects_non_integer_counts(self) -> None:
         for payload in ({}, {"count": True}, {"count": "1"}):
