@@ -288,7 +288,7 @@ them:
 | `client.save_basket_items(assortment, venue=..., items=...)` | Replaces the whole server basket for that restaurant. Needs only the menu, a venue context, and items. This does not place an order. |
 | `client.save_basket(selection)` | Also replaces the whole server basket, but takes a full `OrderSelection`. |
 | `client.get_basket_count()` | The number of baskets stored on the server. |
-| `client.get_baskets_page(latitude, longitude)` | The full baskets page as a dictionary. It can contain personal data; do not log it raw. |
+| `client.get_baskets_page(latitude, longitude)` | Lists the saved baskets, as one page of the raw dictionary. It can contain personal data; do not log it raw. |
 | `client.delete_baskets(basket_ids)` | Deletes the listed server baskets. |
 | `client.get_venue_checkout_context(slug)` | The `VenueCheckoutContext` for a restaurant, read from its static page. |
 
@@ -308,19 +308,47 @@ whole basket.
 call. You get a basket ID from `get_baskets_page()`, or from the `SavedBasket`
 that `save_basket()` and `save_basket_items()` return.
 
+An empty list is rejected, because Wolt's behaviour in that case has never been
+observed. So check the list before you send it, as both examples below do.
+
+To delete every saved basket:
+
+```python
+page = client.get_baskets_page(60.17, 24.94)
+ids = [entry["id"] for entry in page["baskets"]]
+if ids:
+    client.delete_baskets(ids)
+```
+
+To delete the basket for one restaurant:
+
 ```python
 page = client.get_baskets_page(60.17, 24.94)
 ids = [
     entry["id"] for entry in page["baskets"]
     if entry["venue"]["slug"] == "<restaurant slug>"
 ]
-client.delete_baskets(ids)
+if ids:
+    client.delete_baskets(ids)
 ```
+
+Every saved basket has items in it, because a basket only exists once you put
+something in one. There is no empty saved basket to skip.
 
 Wolt sends nothing back, so the call cannot tell you whether the baskets were
 really there or whether anything was deleted. If you need to be sure, read
-`get_basket_count()` or `get_baskets_page()` again afterwards. An empty list is
-rejected, because Wolt's behaviour in that case has never been observed.
+`get_basket_count()` or `get_baskets_page()` again afterwards.
+
+Two limits of `get_baskets_page()` matter when you delete in bulk:
+
+- It reads one page. The response carries a `start_after_time` cursor, which
+  suggests Wolt can split a long list, and the library does not follow that
+  cursor. Compare `len(page["baskets"])` with `get_basket_count()` to see
+  whether you have the whole list.
+- It requires coordinates, and it is not known whether they only drive the
+  delivery estimates shown in the app or actually restrict which baskets come
+  back. If a basket you expect is missing, try coordinates near that
+  restaurant.
 
 #### Change a saved basket
 
