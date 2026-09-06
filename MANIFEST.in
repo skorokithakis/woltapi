@@ -1,7 +1,7 @@
 global-exclude *.har
 global-exclude .env
 global-exclude .env.* *.sqlite3 *.sqlite3-*
-include LICENSE README.md RELEASING.md WOLT_API.md
+include LICENSE README.md RELEASING.md
 recursive-include examples *.py
 recursive-include tests *.py
 prune .tickets

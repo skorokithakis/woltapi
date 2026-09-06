@@ -60,7 +60,9 @@ class ItemSelection:
     Prices that cannot be derived safely are caller inputs: ``basket_price``
     and ``end_amount`` remain independent. ``checkout_fields`` and
     ``post_checkout_fields`` carry exact field names for their respective wire
-    representations and are copied without filling omitted keys.
+    representations and are copied without filling omitted keys. Quote-only
+    callers can supply ``payment_fields`` (product tags and VAT fields) without
+    supplying the complete post-checkout purchase representation.
     """
 
     id: str
@@ -72,6 +74,7 @@ class ItemSelection:
     checkout_fields: Mapping[str, Any]
     options: Sequence[OptionSelection] = ()
     post_checkout_fields: Mapping[str, Any] | None = field(default=None, repr=False)
+    payment_fields: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,14 @@ class QuoteSnapshot:
         """Return an unchanged, detached copy of the server validation object."""
 
         return deepcopy(self._quote["purchase_validation"])
+
+    @property
+    def response(self) -> dict[str, Any]:
+        """Return a detached quote response for checking server action state.
+
+        This can contain private checkout data. Do not log the whole response.
+        """
+        return deepcopy(self._quote)
 
     def is_current_for(self, selection: OrderSelection) -> bool:
         """Whether this snapshot belongs to the unchanged local selection."""
@@ -313,18 +324,21 @@ class OrderSelection:
 
         items: list[dict[str, Any]] = []
         for item in self._data["items"]:
-            post_checkout_item = _serialize_post_checkout_item(item)
+            # Quote-only callers need tax data, not purchase-builder fields.
+            payment_fields = item.get("payment_fields")
+            if payment_fields is None:
+                payment_fields = _serialize_post_checkout_item(item)
             items.append(
                 {
                     "id": item["id"],
                     "alcohol_permille": item["checkout_fields"]["alcohol_permille"],
-                    "product_hierarchy_tags": post_checkout_item[
-                        "product_hierarchy_tags"
-                    ],
-                    "vat_percentage": post_checkout_item["vat_percentage"],
-                    "vat_percentage_decimal": post_checkout_item[
+                    "product_hierarchy_tags": deepcopy(
+                        payment_fields.get("product_hierarchy_tags")
+                    ),
+                    "vat_percentage": payment_fields.get("vat_percentage"),
+                    "vat_percentage_decimal": payment_fields.get(
                         "vat_percentage_decimal"
-                    ],
+                    ),
                 }
             )
         return {
@@ -447,6 +461,18 @@ def _normalize_item(
         catalog_item["restrictions"],
     )
     post_checkout_fields = _copy_optional_mapping(selected_item.post_checkout_fields)
+    payment_fields = _copy_optional_mapping(selected_item.payment_fields)
+    if payment_fields is not None and post_checkout_fields is not None:
+        for name in (
+            "product_hierarchy_tags",
+            "vat_percentage",
+            "vat_percentage_decimal",
+        ):
+            if (
+                name in post_checkout_fields
+                and payment_fields.get(name) != post_checkout_fields[name]
+            ):
+                raise SelectionError("Payment and post-checkout tax fields disagree.")
 
     return {
         "id": selected_item.id,
@@ -459,6 +485,7 @@ def _normalize_item(
         "checksum": checksum,
         "checkout_fields": checkout_fields,
         "post_checkout_fields": post_checkout_fields,
+        "payment_fields": payment_fields,
         "options": options,
         "catalog": {
             "item": deepcopy(dict(catalog_item)),

@@ -8,9 +8,23 @@ part is unfinished and has not been tested with a real purchase.
 
 ## Install
 
-You need Python 3.10 or newer. Open a terminal in this project's folder and run:
+You need Python 3.10 or newer. Install the library from PyPI:
 
 ```bash
+pip install woltapi
+```
+
+You can then use `from woltapi import WoltClient, SessionCredentials` in your
+Python code. See [Use it in Python](#use-it-in-python) below.
+
+### Install from source
+
+To run the example scripts or work on the library, clone this repository and
+install an editable copy:
+
+```bash
+git clone https://github.com/skorokithakis/woltapi.git
+cd woltapi
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
@@ -20,6 +34,9 @@ These commands create a separate Python environment and install the library in
 it. On Windows, activate it with `.venv\Scripts\activate` instead of `source`.
 
 ## Try it
+
+Run these commands from the project folder after installing from source above.
+The `examples/` scripts are not installed by `pip install woltapi`.
 
 The browsing example shows your recent orders, searches for a restaurant, and
 lists some of its menu items. **It will not order anything or change your basket.**
@@ -76,9 +93,10 @@ The browsing script can also read the token from an environment variable named
 when it starts. If that variable is set, the script uses it instead of asking
 you to paste a token. No credential file is needed.
 
-Tokens expire. This library cannot refresh them or sign you in. If you get
-**HTTP 401**, get a current token from a successful browser request and try again.
-If you set `WOLT_ACCESS_TOKEN`, remember to update it too.
+Access tokens expire. With manually supplied headers, get a current access token
+if you receive **HTTP 401**, and update `WOLT_ACCESS_TOKEN` if you use it. For
+automatic renewal in Python, use a consumer refresh token as described below.
+The library cannot sign you in.
 
 ## Use it in Python
 
@@ -130,6 +148,60 @@ only to its matching server.
 `SessionCredentials`. Reading an environment variable or asking for a token is
 the job of your script, not the library.
 
+### Automatic token refresh
+
+Only a **consumer refresh token** is needed to start: no access token, password,
+client secret, or browser cookies need to accompany the request. In your logged-in
+Wolt browser, find `__wrtoken` under **Developer Tools > Application > Cookies**.
+Use its value, without surrounding quotes. This is not the access token from an
+Authorization header or the refresh token used by the Converse support widget.
+Treat it like a password and do not put it in Git or logs.
+
+```python
+from getpass import getpass
+
+from woltapi import RefreshTokenCredentials, WoltClient
+
+credentials = RefreshTokenCredentials(
+    getpass("Wolt consumer refresh token: ").strip(),
+)
+client = WoltClient(credentials)
+history = client.get_orders_page()
+```
+
+The first API call exchanges the refresh token at
+`https://authentication.wolt.com/v1/wauth2/access_token`. Subsequent calls reuse
+the access token until shortly before its server-reported expiry (30 minutes in
+the verified response). The access token is supplied to the restaurant, consumer,
+and payment hosts; the refresh token is sent only to the authentication host.
+You can also call `credentials.refresh()` to exchange it explicitly.
+
+Wolt may return a replacement refresh token. `credentials.refresh_token` always
+holds the latest successfully validated value. For applications that run across
+restarts, pass `on_refresh=save_refresh_token`, where your function accepts that
+string and saves it to your secret store after each exchange. The library does
+not read or write credential files. Without persistence, a rotated token may be
+lost when your process exits. Do not share one refresh token across independent
+processes that might refresh it concurrently.
+
+The callback runs before the API request proceeds and must not call back into
+`credentials.refresh()` or `credentials.headers_for()`. If it raises, the
+exception propagates but the new tokens remain in memory. Later calls retry the
+callback before any further authentication or API request; they remain blocked
+until persistence succeeds. Make your callback safe to repeat with the same token.
+
+Optional `restaurant_headers`, `consumer_headers`, and `payment_headers` still
+scope extra headers to their respective hosts. `Authorization` is managed by
+`RefreshTokenCredentials`. Its `timeout` controls authentication requests
+separately from `WoltClient`'s API timeout (both default to 10 seconds).
+
+Refresh requests are not retried or redirected, and API requests are never
+automatically replayed after a 401, including purchases. An expired or revoked
+refresh token requires a new browser session credential. Authentication failures
+use the existing exceptions, such as `HTTPStatusError` with
+`service == "authentication"`. The example scripts still accept access tokens;
+automatic renewal is opt-in through this Python API.
+
 ### Useful methods
 
 | Call | What you get |
@@ -160,6 +232,21 @@ sending them to shared logs. The browsing example prints only selected fields.
 
 Not as a simple, ready-to-use feature yet. There is no `order("pizza")` method.
 
+To try **checkout without buying anything**, use the new checkout-only example
+from an editable source installation:
+
+```bash
+python examples/order.py --latitude 60.17 --longitude 24.94 --query pizza
+```
+
+Use your own coordinates. It prompts for your token (or uses `WOLT_ACCESS_TOKEN`),
+guides you through selecting an item and a saved delivery target/card, then asks
+before requesting a price. It never submits a purchase. Basket saving is off by
+default and needs a separate confirmation if enabled.
+
+This is still a test tool: it may stop if the catalog lacks required checkout
+fields. Run `python examples/order.py --help` for available options.
+
 The library has methods to choose items, save a basket, ask Wolt for a price,
 and submit a purchase. But some required inputs still need to come from your
 own code, including browser/device information and detailed item data.
@@ -173,11 +260,8 @@ Do not call it unless you intend to buy the exact order you have reviewed. If it
 times out or raises `OrderOutcomeUnknown`, **do not send it again**: Wolt may
 already have received it. Check the order in Wolt instead.
 
-Login, token refresh, adding cards, payment verification screens, scheduled
+Login, adding cards, payment verification screens, scheduled
 orders, cancellation, and refunds are not supported.
-
-For the technical details behind the ordering code, see [WOLT_API.md](WOLT_API.md).
-You do not need to read that file to use the browsing example.
 
 ## Run the tests
 

@@ -38,10 +38,11 @@ class WoltClient:
     """Read discovery data and make explicit selection and purchase operations.
 
     Purchase submission requires a caller-created authorization and an explicit,
-    durable attempt store. The class has no login, refresh, asynchronous,
-    WebSocket, card-enrollment, challenge, cancellation, refund, or autonomous
-    ordering methods. Local selections are immutable; a changed selection must
-    be rebuilt and cannot silently reuse an earlier quote snapshot.
+    durable attempt store. Credentials may manage token refresh. The class has no
+    login, asynchronous, WebSocket, card-enrollment, challenge, cancellation,
+    refund, or autonomous ordering methods. Local selections are immutable; a
+    changed selection must be rebuilt and cannot silently reuse an earlier quote
+    snapshot.
     """
 
     def __init__(

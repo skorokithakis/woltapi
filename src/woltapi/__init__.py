@@ -1,5 +1,6 @@
 """Synchronous selection and explicit purchase client for observed Wolt hosts."""
 
+from .auth import RefreshTokenCredentials
 from .client import WoltClient
 from .credentials import SessionCredentials
 from .errors import (
@@ -72,6 +73,7 @@ __all__ = [
     "PurchasePreparationError",
     "PurchaseResult",
     "QuoteSnapshot",
+    "RefreshTokenCredentials",
     "RequestFailedError",
     "RequestTimeoutError",
     "ResponseDecodeError",
