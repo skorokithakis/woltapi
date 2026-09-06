@@ -141,7 +141,7 @@ def _request_headers(
     credential_headers: Mapping[str, str],
     has_json_body: bool,
 ) -> dict[str, str]:
-    """Copy headers while ensuring JSON writes have one content type."""
+    """Copy headers, ensure one JSON content type, and identify the platform."""
 
     headers: dict[str, str] = {}
     lower_names: set[str] = set()
@@ -155,6 +155,11 @@ def _request_headers(
         lower_names.add(normalized_name)
     if has_json_body:
         headers["Content-Type"] = "application/json"
+    if "platform" not in lower_names:
+        # The browser sends platform on every Wolt request, and
+        # payment-service rejects requests without it (HTTP 422, isolated by
+        # live probes 2026-09). Credential-supplied values take precedence.
+        headers["platform"] = "Web"
     return headers
 
 
