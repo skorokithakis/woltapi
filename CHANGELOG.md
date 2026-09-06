@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/skorokithakis/woltapi/compare/v0.2.0...v0.3.0) (2026-09-06)
+
+
+### Features
+
+* add basket management and server basket reads ([327d84b](https://github.com/skorokithakis/woltapi/commit/327d84bc0802ae3f9e7f919e152ec6c6d60024d8))
+
 ## [0.2.0](https://github.com/skorokithakis/woltapi/compare/v0.1.0...v0.2.0) (2026-09-06)
 
 
