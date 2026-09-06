@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/skorokithakis/woltapi/compare/v0.4.0...v0.4.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* accept plain catalog item names ([4102cc9](https://github.com/skorokithakis/woltapi/commit/4102cc908b31bb59a09d935329047d4354f65f76))
+
 ## [0.4.0](https://github.com/skorokithakis/woltapi/compare/v0.3.0...v0.4.0) (2026-09-06)
 
 
