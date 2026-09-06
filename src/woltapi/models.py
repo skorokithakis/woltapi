@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -19,19 +19,26 @@ class Venue:
 
 @dataclass(frozen=True)
 class DeliveryTarget:
-    """An opaque saved delivery reference without address details."""
+    """A saved delivery reference with limited display details."""
 
     id: str
+    alias: str | None = field(default=None, repr=False)
+    label_type: str | None = field(default=None, repr=False)
+    address: str | None = field(default=None, repr=False)
+    city: str | None = field(default=None, repr=False)
+    postcode: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
 class PaymentMethod:
-    """An enabled saved-card reference without card metadata."""
+    """An enabled saved-card reference with limited display details."""
 
     id: str
     type: str
     is_selected: bool
     is_default: bool
+    title: str | None = field(default=None, repr=False)
+    subtitle: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

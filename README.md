@@ -224,7 +224,7 @@ longer use this path; prefer `RefreshTokenCredentials`.
 | `client.get_venue_static(slug)` | A dictionary of restaurant details. |
 | `client.get_venue_dynamic(slug, latitude, longitude)` | Current opening and delivery information. |
 | `client.get_orders_page()` | A dictionary containing the current page of order history. |
-| `client.list_delivery_targets()` | References to your saved delivery addresses, without printing the addresses. |
+| `client.list_delivery_targets()` | References to your saved delivery addresses, with saved labels and address details. |
 | `client.get_order_status(purchase_id)` | An order's status and some price information. |
 | `derive_checkout_fields(assortment, item)` | The checkout metadata fields for one menu item, derived from the assortment. Raises an error for items in zero or multiple categories. |
 
@@ -240,7 +240,8 @@ print(f"You have {len(targets)} saved delivery addresses.")
 ```
 
 Responses can contain personal information. Avoid printing entire responses or
-sending them to shared logs. The browsing example prints only selected fields.
+sending them to shared logs. The examples print saved addresses and card labels
+to the local terminal only. The browsing example prints only selected fields.
 
 ## Can it order food?
 

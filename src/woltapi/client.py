@@ -191,7 +191,7 @@ class WoltClient:
         )
 
     def list_delivery_targets(self) -> tuple[DeliveryTarget, ...]:
-        """List opaque saved delivery IDs without exposing address details."""
+        """List saved delivery IDs with limited display details."""
 
         self._delivery_target_ids = set()
         response = self._transport.request(
@@ -209,7 +209,19 @@ class WoltClient:
             target_id = result.get("id")
             if not _is_nonempty_string(target_id):
                 continue
-            targets.append(DeliveryTarget(id=target_id))
+            location = result.get("location")
+            if not isinstance(location, Mapping):
+                location = {}
+            targets.append(
+                DeliveryTarget(
+                    id=target_id,
+                    alias=_optional_string(result.get("alias")),
+                    label_type=_optional_string(result.get("label_type")),
+                    address=_optional_string(location.get("address")),
+                    city=_optional_string(location.get("city")),
+                    postcode=_optional_string(location.get("postcode")),
+                )
+            )
             target_ids.add(target_id)
         self._delivery_target_ids = target_ids
         return tuple(targets)
@@ -264,6 +276,8 @@ class WoltClient:
                     type=method_type,
                     is_selected=node.get("is_selected") is True,
                     is_default=node.get("is_default") is True,
+                    title=_optional_string(node.get("title")),
+                    subtitle=_optional_string(node.get("subtitle")),
                 )
             )
             eligibility_by_id[method_id] = eligibility_binding

@@ -68,7 +68,21 @@ def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
             }
         },
         assortment,
-        {"results": [{"id": delivery.delivery_info_id, "address": "PRIVATE ADDRESS"}]},
+        {
+            "results": [
+                {
+                    "id": delivery.delivery_info_id,
+                    "alias": "Example home",
+                    "address": "PRIVATE ADDRESS",
+                    "phone_number": "PRIVATE PHONE",
+                    "location": {
+                        "address": "1 Example Street",
+                        "city": "Example City",
+                        "postcode": "12345",
+                    },
+                }
+            ]
+        },
         {
             "root_element": {
                 "element_type": "list",
@@ -76,6 +90,8 @@ def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
                     {
                         "element_type": "payment-method",
                         "is_enabled": True,
+                        "title": "Example card",
+                        "subtitle": "Example bank",
                         "method": {
                             "id": "card-1",
                             "type": "card",
@@ -96,9 +112,7 @@ def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
         "0",
         "1",
         "YES",
-        "Home",
         "1",
-        "My card",
     ]
     if save_basket:
         responses.append({"id": "basket-1", "venue_id": venue.id})
@@ -169,14 +183,18 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
         "31.00 EUR",
         "27.00 EUR",
         "Extra cheese",
-        "Home",
-        "My card",
+        "Example home",
+        "1 Example Street",
+        "Example City",
+        "Example card",
+        "Example bank",
         "Server action enabled: False",
         "STOPPED",
     ):
         assert expected in output
     for private in (
         "PRIVATE ADDRESS",
+        "PRIVATE PHONE",
         "PRIVATE CARD",
         "PRIVATE QUOTE DATA",
         "synthetic-secret",

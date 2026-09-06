@@ -53,6 +53,27 @@ def choose(label, values, describe):
     return values[number("Number: ", 1, len(values)) - 1]
 
 
+def delivery_description(target):
+    return (
+        " | ".join(
+            value
+            for value in (
+                target.alias or target.label_type,
+                target.address,
+                target.city,
+            )
+            if value
+        )
+        or target.id
+    )
+
+
+def card_description(card):
+    return " | ".join(value for value in (card.title, card.subtitle) if value) or (
+        f"{card.id} ({card.type})"
+    )
+
+
 def fields(source, supplied, names, section):
     if not isinstance(source, dict) or not isinstance(supplied, dict):
         raise CheckoutInputError(f"Expected an object for {section}.")
@@ -211,18 +232,15 @@ def checkout(client, args, context):
     )
     tip = number("Courier tip in cents (0 for none): ")
     delivery = choose(
-        "saved delivery target", client.list_delivery_targets(), lambda d: d.id
+        "saved delivery target", client.list_delivery_targets(), delivery_description
     )
-    print(
-        "Target IDs are references, not addresses. Match the ID in your browser if unsure."
-    )
+    print(f"Selected delivery target: {delivery_description(delivery)}")
     if (
         input("Does this target match your supplied coordinates? Type YES: ").strip()
         != "YES"
     ):
         print("Cancelled before card lookup or quote.")
         return
-    delivery_label = input("Your label for this target (for example, Home): ").strip()
     card_context = {
         "venue_id": venue.id,
         "country": venue_fields["country"],
@@ -239,12 +257,8 @@ def checkout(client, args, context):
     card = choose(
         "enabled saved card",
         client.get_payment_methods(card_context),
-        lambda c: f"{c.id} ({c.type})",
+        card_description,
     )
-    print(
-        "Card IDs must be matched to your saved card in Wolt; no card numbers are displayed."
-    )
-    card_label = input("Your label for this card: ").strip()
     selected_item = ItemSelection(
         id=item["id"],
         count=count,
@@ -270,7 +284,9 @@ def checkout(client, args, context):
     for name in option_names:
         print(f"  Option: {name}")
     print(f"Configured unit price: {money(unit_amount, currency)}")
-    print(f"Delivery: {text(delivery_label)} | Card: {text(card_label)}")
+    print(
+        f"Delivery: {delivery_description(delivery)} | Card: {card_description(card)}"
+    )
     print(
         f"Tip: {money(tip, currency)} | Immediate home delivery; no credits or offers."
     )

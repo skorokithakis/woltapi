@@ -175,17 +175,53 @@ class WoltClientTests(unittest.TestCase):
         self.assertEqual(consumer_headers["x-consumer-session"], "consumer-secret")
         self.assertNotIn("x-restaurant-session", consumer_headers)
 
-    def test_delivery_and_payment_summaries_omit_sensitive_context(self) -> None:
+    def test_platform_header_defaults_to_web_and_respects_overrides(self) -> None:
+        client, opener = make_client(FakeResponse({"orders": []}))
+        client.get_orders_page()
+        self.assertEqual(_headers(opener.requests[0])["platform"], "Web")
+
+        credentials = SessionCredentials(
+            consumer_headers={"platform": "Synthetic-Platform"}
+        )
+        override_opener = FakeOpener([FakeResponse({"orders": []})])
+        override_client = WoltClient(
+            credentials,
+            _transport=WoltTransport(credentials, _opener=override_opener),
+        )
+        override_client.get_orders_page()
+        self.assertEqual(
+            _headers(override_opener.requests[0])["platform"], "Synthetic-Platform"
+        )
+
+    def test_delivery_and_payment_summaries_include_display_fields(self) -> None:
         client, opener = make_client(
             FakeResponse(
                 {
                     "results": [
                         {
                             "id": "delivery-1",
-                            "address": "Synthetic Secret Street",
-                            "phone": "+00000000",
-                            "location": {"latitude": 1, "longitude": 2},
-                        }
+                            "alias": "Example home",
+                            "label_type": "home",
+                            "address": "PRIVATE ADDRESS",
+                            "phone_number": "PRIVATE PHONE",
+                            "location": {
+                                "address": "1 Example Street",
+                                "city": "Example City",
+                                "postcode": "12345",
+                                "latitude": 1,
+                                "longitude": 2,
+                            },
+                        },
+                        {
+                            "id": "delivery-2",
+                            "alias": 1,
+                            "label_type": [],
+                            "location": {
+                                "address": {},
+                                "city": 2,
+                                "postcode": None,
+                            },
+                        },
                     ]
                 }
             ),
@@ -202,6 +238,8 @@ class WoltClientTests(unittest.TestCase):
                                         "is_enabled": True,
                                         "is_selected": True,
                                         "is_default": False,
+                                        "title": "Example card",
+                                        "subtitle": "Example bank",
                                         "method": {
                                             "id": "card-1",
                                             "type": "card",
@@ -209,6 +247,13 @@ class WoltClientTests(unittest.TestCase):
                                             "card_bin": "synthetic-bin",
                                             "expiry": {"month": 1, "year": 2099},
                                         },
+                                    },
+                                    {
+                                        "element_type": "payment-method",
+                                        "is_enabled": True,
+                                        "title": [],
+                                        "subtitle": {"unexpected": "shape"},
+                                        "method": {"id": "card-2", "type": "card"},
                                     },
                                     {
                                         "element_type": "payment-method",
@@ -246,21 +291,47 @@ class WoltClientTests(unittest.TestCase):
         cards = client.get_payment_methods(payment_context)
 
         self.assertEqual(targets[0].id, "delivery-1")
-        self.assertFalse(hasattr(targets[0], "address"))
-        self.assertNotIn("Synthetic Secret Street", repr(targets[0]))
-        self.assertEqual(client._delivery_target_ids, {"delivery-1"})
-        self.assertNotIn("Synthetic Secret Street", repr(client._delivery_target_ids))
+        self.assertEqual(targets[0].alias, "Example home")
+        self.assertEqual(targets[0].label_type, "home")
+        self.assertEqual(targets[0].address, "1 Example Street")
+        self.assertEqual(targets[0].city, "Example City")
+        self.assertEqual(targets[0].postcode, "12345")
+        self.assertEqual(targets[1].alias, None)
+        self.assertEqual(targets[1].label_type, None)
+        self.assertEqual(targets[1].address, None)
+        self.assertEqual(targets[1].city, None)
+        self.assertEqual(targets[1].postcode, None)
+        self.assertEqual(client._delivery_target_ids, {"delivery-1", "delivery-2"})
+        target_repr = repr(targets[0])
+        self.assertIn("delivery-1", target_repr)
+        for private in (
+            "Example home",
+            "home",
+            "1 Example Street",
+            "Example City",
+            "12345",
+            "PRIVATE ADDRESS",
+            "PRIVATE PHONE",
+        ):
+            self.assertNotIn(private, target_repr)
         self.assertEqual(cards[0].id, "card-1")
         self.assertEqual(cards[0].type, "card")
         self.assertTrue(cards[0].is_selected)
+        self.assertEqual(cards[0].title, "Example card")
+        self.assertEqual(cards[0].subtitle, "Example bank")
+        self.assertEqual(cards[1].title, None)
+        self.assertEqual(cards[1].subtitle, None)
         self.assertFalse(hasattr(cards[0], "masked_number"))
-        self.assertNotIn("masked-synthetic-card", repr(cards[0]))
-        self.assertEqual(set(client._payment_eligibility_by_id), {"card-1"})
+        card_repr = repr(cards[0])
+        self.assertIn("card-1", card_repr)
+        for private in ("Example card", "Example bank", "masked-synthetic-card"):
+            self.assertNotIn(private, card_repr)
+        self.assertEqual(set(client._payment_eligibility_by_id), {"card-1", "card-2"})
         self.assertNotIn(
             "masked-synthetic-card", repr(client._payment_eligibility_by_id)
         )
         self.assertNotIn("synthetic-bin", repr(client._payment_eligibility_by_id))
-        self.assertEqual(len(cards), 1)
+        self.assertEqual(len(cards), 2)
         self.assertEqual(
             json.loads(opener.requests[1].data.decode("utf-8")),
             payment_context,
