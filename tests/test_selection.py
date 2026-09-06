@@ -19,6 +19,7 @@ from woltapi import (
     VenueCheckoutContext,
     WoltClient,
     WoltTransport,
+    derive_checkout_fields,
 )
 
 
@@ -126,6 +127,7 @@ def selection_inputs() -> tuple[
                 "min_quantity_per_purchase": 1,
                 "max_quantity_per_purchase": 2,
                 "allowed_delivery_methods": ["homedelivery"],
+                "alcohol_permille": 0,
                 "restrictions": [],
                 "options": [
                     {
@@ -141,6 +143,7 @@ def selection_inputs() -> tuple[
                 ],
             }
         ],
+        "categories": [{"id": "category-1", "item_ids": ["item-1"]}],
         "options": [
             {
                 "id": "root-option-1",
@@ -207,6 +210,58 @@ def selection_inputs() -> tuple[
 
 
 class SelectionTests(unittest.TestCase):
+    def test_derives_checkout_fields_from_a_single_category(self) -> None:
+        assortment, _, _, _, _ = selection_inputs()
+
+        checkout_fields = derive_checkout_fields(assortment, assortment["items"][0])
+
+        self.assertEqual(
+            checkout_fields,
+            {
+                "category_id": "category-1",
+                "category_ids": ["category-1"],
+                "exclude_from_credits": False,
+                "exclude_from_discounts": False,
+                "exclude_from_discounts_min_basket": False,
+                "alcohol_permille": 0,
+                "restrictions": [],
+            },
+        )
+
+    def test_checkout_field_derivation_rejects_zero_or_multiple_categories(
+        self,
+    ) -> None:
+        assortment, _, _, _, _ = selection_inputs()
+        for categories in (
+            [],
+            [
+                {"id": "category-1", "item_ids": ["item-1"]},
+                {"id": "category-2", "item_ids": ["item-1"]},
+            ],
+        ):
+            with self.subTest(categories=categories):
+                candidate = deepcopy(assortment)
+                candidate["categories"] = categories
+                with self.assertRaises(UnsupportedSelectionError):
+                    derive_checkout_fields(candidate, candidate["items"][0])
+
+    def test_checkout_field_derivation_keeps_item_exclusion_flags(self) -> None:
+        assortment, _, _, _, _ = selection_inputs()
+        assortment["items"][0]["exclude_from_discounts"] = True
+
+        checkout_fields = derive_checkout_fields(assortment, assortment["items"][0])
+
+        self.assertTrue(checkout_fields["exclude_from_discounts"])
+
+    def test_checkout_field_derivation_requires_item_fields(self) -> None:
+        assortment, _, _, _, _ = selection_inputs()
+        for name in ("alcohol_permille", "restrictions"):
+            with self.subTest(name=name):
+                candidate = deepcopy(assortment)
+                del candidate["items"][0][name]
+                with self.assertRaises(UnsupportedSelectionError):
+                    derive_checkout_fields(candidate, candidate["items"][0])
+
     def test_distinct_serializers_keep_configuration_ids_counts_and_amounts(
         self,
     ) -> None:

@@ -389,6 +389,63 @@ _POST_CHECKOUT_RESERVED_FIELDS = {
 _POST_CHECKOUT_OPTION_RESERVED_FIELDS = {"id", "values"}
 
 
+def derive_checkout_fields(
+    assortment: Mapping[str, Any], item: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Derive observed checkout fields for one assortment item."""
+
+    if not isinstance(assortment, Mapping):
+        raise TypeError("assortment must be a mapping.")
+    if not isinstance(item, Mapping):
+        raise TypeError("item must be a mapping.")
+    item_id = item.get("id")
+    if not _is_nonempty_text(item_id):
+        raise UnsupportedSelectionError("The selected item is missing an ID.")
+
+    categories = assortment.get("categories")
+    if not _is_array(categories):
+        raise UnsupportedSelectionError("The assortment categories are unavailable.")
+    category_ids: list[str] = []
+    for category in categories:
+        if not isinstance(category, Mapping):
+            raise UnsupportedSelectionError(
+                "The assortment categories are unavailable."
+            )
+        category_id = category.get("id")
+        item_ids = category.get("item_ids")
+        if (
+            not _is_nonempty_text(category_id)
+            or not _is_array(item_ids)
+            or not all(_is_nonempty_text(candidate_id) for candidate_id in item_ids)
+        ):
+            raise UnsupportedSelectionError(
+                "The assortment categories are unavailable."
+            )
+        if item_id in item_ids:
+            category_ids.append(category_id)
+    if len(category_ids) != 1:
+        raise UnsupportedSelectionError(
+            "The selected item must belong to exactly one category."
+        )
+
+    for name in ("alcohol_permille", "restrictions"):
+        if name not in item:
+            raise UnsupportedSelectionError(
+                "The selected item is missing required checkout fields."
+            )
+    return {
+        "category_id": category_ids[0],
+        "category_ids": category_ids,
+        "exclude_from_credits": deepcopy(item.get("exclude_from_credits", False)),
+        "exclude_from_discounts": deepcopy(item.get("exclude_from_discounts", False)),
+        "exclude_from_discounts_min_basket": deepcopy(
+            item.get("exclude_from_discounts_min_basket", False)
+        ),
+        "alcohol_permille": deepcopy(item["alcohol_permille"]),
+        "restrictions": deepcopy(item["restrictions"]),
+    }
+
+
 def _normalize_venue(venue: VenueCheckoutContext) -> dict[str, Any]:
     if (
         not _is_nonempty_text(venue.id)

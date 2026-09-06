@@ -28,7 +28,6 @@ def load_example(monkeypatch):
 def setup_checkout(monkeypatch, *, save_basket=False, final_answer="QUOTE"):
     assortment, venue, delivery, _, item = selection_inputs()
     catalog = assortment["items"][0]
-    catalog.update(item.checkout_fields)
     catalog["name"] = "Synthetic pizza"
     payment_fields = {
         k: item.post_checkout_fields[k]
@@ -153,8 +152,14 @@ def test_checkout_requests_and_stops_without_purchase(monkeypatch, capsys, save_
         ("POST", "/order-xp/web/v2/pages/checkout"),
     ]
     plan = json.loads(opener.requests[-1].data)["purchase_plan"]
-    assert plan["menu_items"][0]["end_amount"] == 2700
-    assert plan["menu_items"][0]["options"] == [
+    checkout_item = plan["menu_items"][0]
+    assert checkout_item["category_id"] == "category-1"
+    assert checkout_item["category_ids"] == ["category-1"]
+    assert checkout_item["exclude_from_credits"] is False
+    assert checkout_item["exclude_from_discounts"] is False
+    assert checkout_item["exclude_from_discounts_min_basket"] is False
+    assert checkout_item["end_amount"] == 2700
+    assert checkout_item["options"] == [
         {"id": "item-config-1", "values": [{"id": "value-1", "count": 1, "price": 700}]}
     ]
     assert plan["payment_methods"] == [{"id": "card-1", "type": "card"}]

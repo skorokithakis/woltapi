@@ -51,8 +51,9 @@ python examples/browse.py \
 Replace the two numbers with your location. The example numbers are in Helsinki.
 Latitude and longitude are the two numbers that identify a place on a map.
 
-The script asks for your Wolt access token. Paste it and press Enter. Nothing
-will appear while you paste; that is intentional.
+The script asks for your Wolt refresh token. Paste it and press Enter. Nothing
+will appear while you paste; that is intentional. See
+[Get a token](#get-a-token) below.
 
 By default, it shows up to 5 recent orders and 20 menu items from the first
 restaurant in the search results. You can change that:
@@ -76,46 +77,46 @@ The library keeps the original integer amounts; only the display converts them.
 
 ## Get a token
 
-An **access token** is a temporary key that lets the library use your Wolt
-account. Treat it like a password.
+A **refresh token** is a long-lived key that lets the library sign requests
+for your Wolt account. Treat it like a password.
 
 1. Sign in to Wolt in your browser.
-2. Open Developer Tools and select the **Network** tab.
-3. Open your order history in Wolt.
-4. Select a successful request to `consumer-api.wolt.com`.
-5. Under **Request Headers**, find `authorization: Bearer ...`.
-6. Copy the long token after `Bearer `.
+2. Open Developer Tools and select **Application** (Firefox: **Storage**).
+3. Under **Cookies**, find the cookie named `__wrtoken`.
+4. Copy its value, without surrounding quotes.
 
 Do not share the token, put it in Git, or include it in screenshots.
 
-The browsing script can also read the token from an environment variable named
-`WOLT_ACCESS_TOKEN`. An environment variable is a setting passed to a program
-when it starts. If that variable is set, the script uses it instead of asking
-you to paste a token. No credential file is needed.
+The example scripts read the token from the `WOLT_REFRESH_TOKEN` environment
+variable. An environment variable is a setting passed to a program when it
+starts. If it is not set, the scripts ask with a hidden prompt.
 
-Access tokens expire. With manually supplied headers, get a current access token
-if you receive **HTTP 401**, and update `WOLT_ACCESS_TOKEN` if you use it. For
-automatic renewal in Python, use a consumer refresh token as described below.
-The library cannot sign you in.
+Wolt may replace your refresh token over time. The scripts cannot store the
+replacement; they print a note when this happens. If a later run receives
+**HTTP 401**, your token has expired, was replaced, or was revoked; copy a
+current `__wrtoken` value from the browser. The library cannot sign you in.
+Programs that must survive replacement can persist it themselves, as described
+under [How token refresh works](#how-token-refresh-works).
+
+The scripts exchange this refresh token for short-lived access tokens
+automatically; you never handle access tokens yourself. If you want to supply
+raw `Authorization` headers instead, use `SessionCredentials` from Python
+directly, as described under
+[Manually supplied headers](#manually-supplied-headers).
 
 ## Use it in Python
 
-Here is a complete browsing example. It asks for your token and location, then
-searches for pizza and loads the first result's menu:
+Here is a complete browsing example. It asks for your refresh token and
+location, then searches for pizza and loads the first result's menu:
 
 ```python
 from getpass import getpass
 
-from woltapi import SessionCredentials, WoltClient
-
-token = getpass("Wolt access token: ").strip()
-token = token.removeprefix("Bearer ")
-headers = {"Authorization": f"Bearer {token}"}
+from woltapi import RefreshTokenCredentials, WoltClient
 
 client = WoltClient(
-    SessionCredentials(
-        restaurant_headers=headers,
-        consumer_headers=headers,
+    RefreshTokenCredentials(
+        getpass("Wolt refresh token: ").strip(),
     )
 )
 
@@ -139,35 +140,17 @@ else:
     print("No restaurants found. Try another search.")
 ```
 
-Wolt uses different servers for different jobs. `restaurant_headers` supplies
-the login token for searches and saved delivery addresses. `consumer_headers`
-supplies it for menus and order history. The library sends each set of headers
-only to its matching server.
-
 **The library does not find your token for you.** Your code passes it into
-`SessionCredentials`. Reading an environment variable or asking for a token is
-the job of your script, not the library.
+`RefreshTokenCredentials`. Reading a file, an environment variable, or a prompt
+is the job of your script, not the library.
 
-### Automatic token refresh
+### How token refresh works
 
-Only a **consumer refresh token** is needed to start: no access token, password,
-client secret, or browser cookies need to accompany the request. In your logged-in
-Wolt browser, find `__wrtoken` under **Developer Tools > Application > Cookies**.
-Use its value, without surrounding quotes. This is not the access token from an
-Authorization header or the refresh token used by the Converse support widget.
-Treat it like a password and do not put it in Git or logs.
-
-```python
-from getpass import getpass
-
-from woltapi import RefreshTokenCredentials, WoltClient
-
-credentials = RefreshTokenCredentials(
-    getpass("Wolt consumer refresh token: ").strip(),
-)
-client = WoltClient(credentials)
-history = client.get_orders_page()
-```
+Only the **consumer refresh token** is needed to start: no access token,
+password, client secret, or browser cookies need to accompany the request. This
+is the `__wrtoken` value from [Get a token](#get-a-token). It is not the access
+token from an Authorization header or the refresh token used by the Converse
+support widget.
 
 The first API call exchanges the refresh token at
 `https://authentication.wolt.com/v1/wauth2/access_token`. Subsequent calls reuse
@@ -190,8 +173,8 @@ exception propagates but the new tokens remain in memory. Later calls retry the
 callback before any further authentication or API request; they remain blocked
 until persistence succeeds. Make your callback safe to repeat with the same token.
 
-Optional `restaurant_headers`, `consumer_headers`, and `payment_headers` still
-scope extra headers to their respective hosts. `Authorization` is managed by
+Optional `restaurant_headers`, `consumer_headers`, and `payment_headers` scope
+extra headers to their respective hosts. `Authorization` is managed by
 `RefreshTokenCredentials`. Its `timeout` controls authentication requests
 separately from `WoltClient`'s API timeout (both default to 10 seconds).
 
@@ -199,8 +182,28 @@ Refresh requests are not retried or redirected, and API requests are never
 automatically replayed after a 401, including purchases. An expired or revoked
 refresh token requires a new browser session credential. Authentication failures
 use the existing exceptions, such as `HTTPStatusError` with
-`service == "authentication"`. The example scripts still accept access tokens;
-automatic renewal is opt-in through this Python API.
+`service == "authentication"`.
+
+### Manually supplied headers
+
+If you already hold a short-lived access token and want to supply raw headers
+yourself, use `SessionCredentials` instead:
+
+```python
+from woltapi import SessionCredentials, WoltClient
+
+headers = {"Authorization": "Bearer <access token>"}
+client = WoltClient(
+    SessionCredentials(restaurant_headers=headers, consumer_headers=headers)
+)
+```
+
+Wolt uses different servers for different jobs. `restaurant_headers` supplies
+the login token for searches and saved delivery addresses. `consumer_headers`
+supplies it for menus and order history. The library sends each set of headers
+only to its matching server. With this class, nothing renews the token: after
+about 30 minutes, requests fail with **HTTP 401**. The example scripts no
+longer use this path; prefer `RefreshTokenCredentials`.
 
 ### Useful methods
 
@@ -213,6 +216,7 @@ automatic renewal is opt-in through this Python API.
 | `client.get_orders_page()` | A dictionary containing the current page of order history. |
 | `client.list_delivery_targets()` | References to your saved delivery addresses, without printing the addresses. |
 | `client.get_order_status(purchase_id)` | An order's status and some price information. |
+| `derive_checkout_fields(assortment, item)` | The checkout metadata fields for one menu item, derived from the assortment. Raises an error for items in zero or multiple categories. |
 
 For example, after creating `client`:
 
@@ -239,13 +243,20 @@ from an editable source installation:
 python examples/order.py --latitude 60.17 --longitude 24.94 --query pizza
 ```
 
-Use your own coordinates. It prompts for your token (or uses `WOLT_ACCESS_TOKEN`),
-guides you through selecting an item and a saved delivery target/card, then asks
-before requesting a price. It never submits a purchase. Basket saving is off by
-default and needs a separate confirmation if enabled.
+Use your own coordinates. It reads your refresh token as described in
+[Get a token](#get-a-token), guides you through selecting an item and a saved
+delivery target/card, then asks before requesting a price. It never submits a
+purchase. Basket saving is off by default and needs a separate confirmation if
+enabled.
 
-This is still a test tool: it may stop if the catalog lacks required checkout
-fields. Run `python examples/order.py --help` for available options.
+The checkout example derives `category_id`, `category_ids`, and the three
+checkout exclusion flags from the assortment, so those fields do not need a
+browser context file. It only supports items in exactly one category and stops
+rather than guessing for zero or multiple categories. If it stops, you can
+supply the missing values yourself with `--context-file <path>`, a JSON object
+whose `checkout_fields` entries were copied from your own browser's checkout
+request for the same item. It may still stop if other required catalog data is
+missing. Run `python examples/order.py --help` for available options.
 
 The library has methods to choose items, save a basket, ask Wolt for a price,
 and submit a purchase. But some required inputs still need to come from your

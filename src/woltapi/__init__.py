@@ -43,6 +43,7 @@ from .selection import (
     QuoteSnapshot,
     SavedBasket,
     VenueCheckoutContext,
+    derive_checkout_fields,
 )
 from .transport import WoltTransport
 
@@ -89,4 +90,5 @@ __all__ = [
     "WoltTransport",
     "WoltTransportError",
     "authorize_prepared_order",
+    "derive_checkout_fields",
 ]

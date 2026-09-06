@@ -9,7 +9,7 @@ import getpass
 import math
 import os
 
-from woltapi import HTTPStatusError, SessionCredentials, WoltApiError, WoltClient
+from woltapi import HTTPStatusError, RefreshTokenCredentials, WoltApiError, WoltClient
 
 
 def text(value, language="en"):
@@ -115,18 +115,17 @@ def main():
     ):
         parser.error("Provide finite latitude [-90, 90] and longitude [-180, 180].")
     try:
-        headers = {
-            "Authorization": "Bearer " + access_token(),
-            "app-language": args.language,
-        }
-        client = WoltClient(
-            SessionCredentials(restaurant_headers=headers, consumer_headers=headers)
-        )
+        client = WoltClient(refresh_credentials(args.language))
         browse(client, args)
     except HTTPStatusError as exc:
-        print(f"\nRequest failed: HTTP {exc.status_code}. No retry was sent.")
+        print(
+            f"\nRequest failed: {exc.service} HTTP {exc.status_code}. No retry was sent."
+        )
         if exc.status_code == 401:
-            print("Supply a current access token from a successful browser request.")
+            print(
+                "The refresh token may be expired or revoked."
+                " Copy a current __wrtoken cookie value from your browser."
+            )
         return 1
     except (EOFError, OSError, UnicodeError, ValueError, WoltApiError) as exc:
         print(f"\nBrowse failed: {type(exc).__name__}. Private error details omitted.")
@@ -134,15 +133,47 @@ def main():
     return 0
 
 
-def access_token():
-    token = os.environ.get("WOLT_ACCESS_TOKEN", "").strip()
+def read_refresh_token():
+    """Read the Wolt consumer refresh token (the __wrtoken cookie value)."""
+    token = os.environ.get("WOLT_REFRESH_TOKEN", "").strip()
     if not token:
-        token = getpass.getpass("Wolt access token (hidden): ").strip()
-    if token.lower().startswith("bearer "):
-        token = token[7:].strip()
-    if not token or not token.isascii() or any(c.isspace() for c in token):
-        raise ValueError("A nonempty bearer token is required.")
+        token = getpass.getpass("Wolt refresh token (hidden): ").strip()
+    if not token:
+        raise ValueError("A nonempty refresh token is required.")
     return token
+
+
+def refresh_credentials(language):
+    """Build auto-refreshing credentials from WOLT_REFRESH_TOKEN or a prompt."""
+    token = read_refresh_token()
+
+    headers = {"app-language": language}
+    return RefreshTokenCredentials(
+        token,
+        on_refresh=rotation_warning(token),
+        restaurant_headers=headers,
+        consumer_headers=headers,
+        payment_headers=headers,
+    )
+
+
+def rotation_warning(initial_token):
+    """Build a callback that warns when the refresh token changes."""
+
+    seen_token = initial_token
+
+    def warn_on_rotation(new_token):
+        nonlocal seen_token
+        # The scripts cannot persist tokens; warn so a later failed run is
+        # explainable. The token value itself must never be printed.
+        if new_token != seen_token:
+            print(
+                "Note: Wolt replaced your refresh token. This script cannot"
+                " store it. If a later run fails, copy __wrtoken again."
+            )
+            seen_token = new_token
+
+    return warn_on_rotation
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from browse import access_token, text
+from browse import refresh_credentials, text
 
 from woltapi import (
     DeliverySelection,
@@ -14,10 +14,10 @@ from woltapi import (
     ItemSelection,
     OptionSelection,
     OptionValueSelection,
-    SessionCredentials,
     VenueCheckoutContext,
     WoltApiError,
     WoltClient,
+    derive_checkout_fields,
 )
 
 
@@ -178,7 +178,7 @@ def checkout(client, args, context):
     count = number("Item quantity: ", 1)
     options, option_names = select_options(item, assortment, args.language)
     checkout_fields = fields(
-        item,
+        derive_checkout_fields(assortment, item),
         context.get("checkout_fields", {}),
         (
             "category_id",
@@ -353,17 +353,7 @@ def main():
         context = json.loads(args.context_file.read_text()) if args.context_file else {}
         if not isinstance(context, dict):
             raise CheckoutInputError("The context file must contain a JSON object.")
-        headers = {
-            "Authorization": "Bearer " + access_token(),
-            "app-language": args.language,
-        }
-        client = WoltClient(
-            SessionCredentials(
-                restaurant_headers=headers,
-                consumer_headers=headers,
-                payment_headers=headers,
-            )
-        )
+        client = WoltClient(refresh_credentials(args.language))
         checkout(client, args, context)
     except CheckoutInputError as exc:
         print(f"Checkout stopped: {exc}")

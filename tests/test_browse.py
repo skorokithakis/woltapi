@@ -1,4 +1,5 @@
 import argparse
+import builtins
 import runpy
 from pathlib import Path
 
@@ -98,26 +99,102 @@ def test_no_search_results_does_not_fetch_menu(monkeypatch, capsys):
     assert "No venues found" in capsys.readouterr().out
 
 
-def test_auth_from_environment_does_not_prompt(monkeypatch):
+def test_refresh_token_from_environment_does_not_prompt(monkeypatch):
     script = load_script(monkeypatch)
-    monkeypatch.setenv("WOLT_ACCESS_TOKEN", "Bearer synthetic.token")
+    monkeypatch.setenv("WOLT_REFRESH_TOKEN", " synthetic.token ")
 
     def unexpected_prompt(*args):
         raise AssertionError("Environment token should prevent prompting")
 
     monkeypatch.setattr("getpass.getpass", unexpected_prompt)
-    assert script["access_token"]() == "synthetic.token"
+    assert script["read_refresh_token"]() == "synthetic.token"
 
 
-def test_auth_prompts_when_environment_missing(monkeypatch):
+def test_refresh_token_prompts_when_environment_missing(monkeypatch):
     script = load_script(monkeypatch)
-    monkeypatch.delenv("WOLT_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("WOLT_REFRESH_TOKEN", raising=False)
     monkeypatch.setattr("getpass.getpass", lambda prompt: " synthetic.token ")
-    assert script["access_token"]() == "synthetic.token"
+    assert script["read_refresh_token"]() == "synthetic.token"
 
 
-def test_auth_rejects_embedded_whitespace(monkeypatch):
+def test_refresh_token_rejects_empty_prompt(monkeypatch):
     script = load_script(monkeypatch)
-    monkeypatch.setenv("WOLT_ACCESS_TOKEN", "synthetic\nheader")
+    monkeypatch.delenv("WOLT_REFRESH_TOKEN", raising=False)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: " ")
     with pytest.raises(ValueError):
-        script["access_token"]()
+        script["read_refresh_token"]()
+
+
+def test_refresh_credentials_uses_environment_token(monkeypatch):
+    script = load_script(monkeypatch)
+    monkeypatch.setenv("WOLT_REFRESH_TOKEN", "synthetic.token")
+    credentials = script["refresh_credentials"]("en")
+    assert credentials.refresh_token == "synthetic.token"
+
+
+def test_rotation_warning_is_silent_for_an_unchanged_token(monkeypatch, capsys):
+    script = load_script(monkeypatch)
+    warning = script["rotation_warning"]("initial-synthetic-token")
+
+    warning("initial-synthetic-token")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_rotation_warning_warns_once_for_a_rotated_token(monkeypatch, capsys):
+    script = load_script(monkeypatch)
+    warning = script["rotation_warning"]("initial-synthetic-token")
+
+    warning("rotated-synthetic-token")
+    warning("rotated-synthetic-token")
+
+    assert capsys.readouterr().out == (
+        "Note: Wolt replaced your refresh token. This script cannot store it. "
+        "If a later run fails, copy __wrtoken again.\n"
+    )
+
+
+def test_rotation_warning_never_prints_tokens(monkeypatch, capsys):
+    script = load_script(monkeypatch)
+    initial_token = "initial-synthetic-token"
+    rotated_token = "rotated-synthetic-token"
+    warning = script["rotation_warning"](initial_token)
+
+    warning(rotated_token)
+
+    output = capsys.readouterr().out
+    assert initial_token not in output
+    assert rotated_token not in output
+
+
+def test_rotation_warning_retries_after_a_print_failure(monkeypatch, capsys):
+    script = load_script(monkeypatch)
+    warning = script["rotation_warning"]("initial-synthetic-token")
+    original_print = builtins.print
+    attempts = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise BrokenPipeError
+        original_print(*args, **kwargs)
+
+    monkeypatch.setattr("builtins.print", fail_once)
+    with pytest.raises(BrokenPipeError):
+        warning("rotated-synthetic-token")
+
+    warning("rotated-synthetic-token")
+
+    assert attempts == 2
+    assert capsys.readouterr().out == (
+        "Note: Wolt replaced your refresh token. This script cannot store it. "
+        "If a later run fails, copy __wrtoken again.\n"
+    )
+
+
+def test_refresh_credentials_rejects_embedded_whitespace(monkeypatch):
+    script = load_script(monkeypatch)
+    monkeypatch.setenv("WOLT_REFRESH_TOKEN", "synthetic\ttoken")
+    with pytest.raises(ValueError):
+        script["refresh_credentials"]("en")
