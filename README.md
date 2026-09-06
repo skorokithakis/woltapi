@@ -283,12 +283,63 @@ baskets you see in the Wolt app. The library can read and replace them:
 
 | Call | What it does |
 | --- | --- |
-| `client.save_basket(selection)` | Replaces the server basket for that restaurant with your selection. This does not place an order. |
+| `client.save_basket_items(assortment, venue=..., items=...)` | Replaces the whole server basket for that restaurant. Needs only the menu, a venue context, and items. This does not place an order. |
+| `client.save_basket(selection)` | Also replaces the whole server basket, but takes a full `OrderSelection`. |
 | `client.get_basket_count()` | The number of baskets stored on the server. |
-| `client.get_venue_basket(venue_id)` | The server basket for one restaurant, or `None` if there is none. |
 | `client.get_baskets_page(latitude, longitude)` | The full baskets page as a dictionary. It can contain personal data; do not log it raw. |
+| `client.get_venue_checkout_context(slug)` | The `VenueCheckoutContext` for a restaurant, read from its static page. |
 
-Deleting a server basket is not supported.
+There are two ways to save. `save_basket_items()` needs no saved address and no
+card, because a basket costs nothing. Use it when you only want to change a
+basket. `save_basket()` takes an `OrderSelection`, which you can only build
+after `list_delivery_targets()` and `get_payment_methods()` on the same client,
+so it needs a saved delivery address and an enabled card. That cost is worth
+paying only when you go on to request a checkout quote with the same selection.
+
+Deleting a server basket is not supported. There is also no call that adds or
+removes a single item: every save replaces the whole basket.
+
+#### Change a saved basket
+
+Editing means four steps: read the saved basket, rebuild it locally, apply
+your change, and save the result.
+
+Read with `get_baskets_page()`. It returns each basket with its restaurant's
+slug and the selected options, which is what a rebuild needs.
+
+```python
+page = client.get_baskets_page(60.17, 24.94)
+saved = next(
+    entry for entry in page["baskets"]
+    if entry["venue"]["slug"] == "<restaurant slug>"
+)
+
+menu = client.get_assortment("<restaurant slug>")
+basket = Basket.from_saved_basket(menu, saved, "en")
+
+basket.set_count("<item id>", 3)
+
+client.save_basket_items(
+    menu,
+    venue=client.get_venue_checkout_context("<restaurant slug>"),
+    items=basket.item_selections(),
+)
+```
+
+`Basket.from_saved_basket()` handles the response quirks for you. A saved item
+lists every option configuration it has, including ones you did not choose
+from; those come back with an empty `values` list and are skipped. Option
+values read back from the server carry no price; this does not matter, because
+`Basket` recomputes every price from the menu you pass in. Substitution
+settings are restored as saved.
+
+Two caveats:
+
+- The rebuild raises `SelectionError` naming the item ID when a saved item is
+  no longer on the restaurant's menu. Remove that item from the saved data or
+  start a fresh `Basket`.
+- A save sends only the restaurant, the currency, and the items. A customer
+  comment attached to the basket in the Wolt app may not survive a save.
 
 ## Can it order food?
 

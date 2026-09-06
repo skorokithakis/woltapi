@@ -354,6 +354,38 @@ class OrderSelection:
         return self._identity
 
 
+def _build_basket_payload(
+    assortment: Mapping[str, Any],
+    *,
+    venue: VenueCheckoutContext,
+    items: Sequence[ItemSelection],
+) -> dict[str, Any]:
+    """Build a basket payload without requiring delivery or payment data."""
+
+    if not isinstance(assortment, Mapping):
+        raise SelectionError("A selection requires an assortment mapping.")
+    if not isinstance(venue, VenueCheckoutContext):
+        raise TypeError("venue must be a VenueCheckoutContext instance.")
+    if not _is_array(items) or not items:
+        raise SelectionError("A selection requires at least one item.")
+
+    catalog_items = _index_by_id(assortment.get("items"))
+    root_options = _index_by_id(assortment.get("options"))
+    normalized_items = [
+        _normalize_item(item, catalog_items, root_options) for item in items
+    ]
+    item_ids = [item["id"] for item in normalized_items]
+    if len(item_ids) != len(set(item_ids)):
+        raise SelectionError("A selection cannot contain duplicate item IDs.")
+
+    normalized_venue = _normalize_venue(venue)
+    return {
+        "venue_id": normalized_venue["id"],
+        "currency": normalized_venue["currency"],
+        "items": [_serialize_basket_item(item) for item in normalized_items],
+    }
+
+
 _CHECKOUT_REQUIRED_FIELDS = {
     "category_id",
     "category_ids",

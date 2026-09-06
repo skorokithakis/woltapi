@@ -2,7 +2,6 @@
 """Interactively test checkout quotes. Never submits a purchase or charges a card."""
 
 import argparse
-import json
 import math
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from woltapi import (
     HTTPStatusError,
     OptionSelection,
     OptionValueSelection,
-    VenueCheckoutContext,
     WoltApiError,
     WoltClient,
 )
@@ -72,25 +70,6 @@ def card_description(card):
     return " | ".join(value for value in (card.title, card.subtitle) if value) or (
         f"{card.id} ({card.type})"
     )
-
-
-def fields(source, supplied, names, section):
-    if not isinstance(source, dict) or not isinstance(supplied, dict):
-        raise CheckoutInputError(f"Expected an object for {section}.")
-    missing = [name for name in names if name not in source and name not in supplied]
-    if missing:
-        raise CheckoutInputError(
-            f"Missing {section}: {', '.join(missing)}. "
-            "Supply current browser values using --context-file; no defaults were invented."
-        )
-    if any(
-        name in source and name in supplied and source[name] != supplied[name]
-        for name in names
-    ):
-        raise CheckoutInputError(
-            f"The {section} context conflicts with current server data."
-        )
-    return {name: source[name] if name in source else supplied[name] for name in names}
 
 
 def select_options(item, assortment, language):
@@ -152,27 +131,19 @@ def select_options(item, assortment, language):
     return selected, descriptions
 
 
-def checkout(client, args, context):
+def checkout(client, args):
     found = client.search_venues(args.query, args.latitude, args.longitude)
     venue = choose("restaurant", found, lambda v: text(v.title or v.slug))
-    static = client.get_venue_static(venue.slug).get("venue")
-    if not isinstance(static, dict) or static.get("id") != venue.id:
+    venue_context = client.get_venue_checkout_context(venue.slug)
+    if venue_context.id != venue.id:
         raise CheckoutInputError(
             "Static venue response does not match the selected restaurant."
         )
-    if context and context.get("venue_id") != venue.id:
-        raise CheckoutInputError("Context venue_id must match the selected restaurant.")
-    venue_fields = fields(
-        static,
-        context.get("venue", {}),
-        ("country", "currency", "self_delivery"),
-        "venue",
-    )
-    if venue.currency is not None and venue_fields["currency"] != venue.currency:
+    if venue.currency is not None and venue_context.currency != venue.currency:
         raise CheckoutInputError(
             "Venue currency changed; start again with current data."
         )
-    currency = venue_fields["currency"]
+    currency = venue_context.currency
     assortment = client.get_assortment(venue.slug)
     catalog_items = assortment.get("items")
     if not isinstance(catalog_items, list) or not all(
@@ -218,7 +189,7 @@ def checkout(client, args, context):
         return
     card_context = {
         "venue_id": venue.id,
-        "country": venue_fields["country"],
+        "country": venue_context.country,
         "delivery_method": "homedelivery",
         "available_methods": ["card"],
         "items": [
@@ -237,7 +208,7 @@ def checkout(client, args, context):
     )
     selection = client.create_selection(
         assortment,
-        venue=VenueCheckoutContext(id=venue.id, preorder_config=None, **venue_fields),
+        venue=venue_context,
         delivery=DeliverySelection(delivery.id, args.latitude, args.longitude),
         payment_method={"id": card.id, "type": card.type},
         courier_tip=tip,
@@ -318,11 +289,6 @@ def main():
     parser.add_argument("--query", default="pizza")
     parser.add_argument("--language", default="en")
     parser.add_argument(
-        "--context-file",
-        type=Path,
-        help="Optional current browser metadata for venue fields missing from static data",
-    )
-    parser.add_argument(
         "--save-basket",
         action="store_true",
         help="Offer to save the remote basket, with separate confirmation",
@@ -337,11 +303,8 @@ def main():
         parser.error("Provide valid latitude and longitude.")
     check_token_file(parser, args.token_file)
     try:
-        context = json.loads(args.context_file.read_text()) if args.context_file else {}
-        if not isinstance(context, dict):
-            raise CheckoutInputError("The context file must contain a JSON object.")
         client = WoltClient(refresh_credentials(args.language, args.token_file))
-        checkout(client, args, context)
+        checkout(client, args)
     except CheckoutInputError as exc:
         print(f"Checkout stopped: {exc}")
         return 1

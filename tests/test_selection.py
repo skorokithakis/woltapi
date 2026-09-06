@@ -111,6 +111,17 @@ def make_discovered_client(
     return client, opener
 
 
+def make_client(*responses: FakeResponse) -> tuple[WoltClient, FakeOpener]:
+    credentials = SessionCredentials(
+        restaurant_headers={"X-Restaurant-Session": "synthetic-restaurant"},
+        consumer_headers={"X-Consumer-Session": "synthetic-consumer"},
+        payment_headers={"X-Payment-Session": "synthetic-payment"},
+    )
+    opener = FakeOpener(list(responses))
+    transport = WoltTransport(credentials, _opener=opener)
+    return WoltClient(credentials, _transport=transport), opener
+
+
 def selection_inputs() -> tuple[
     dict[str, Any],
     VenueCheckoutContext,
@@ -491,6 +502,75 @@ class SelectionTests(unittest.TestCase):
             json.loads(opener.requests[4].data.decode("utf-8")),
             selection.to_post_checkout_payload(),
         )
+
+    def test_save_basket_items_matches_save_basket_without_discovery(self) -> None:
+        discovered_client, discovered_opener = make_discovered_client(
+            FakeResponse({"id": "basket-1", "venue_id": "venue-1"})
+        )
+        client, opener = make_client(
+            FakeResponse({"id": "basket-2", "venue_id": "venue-1"})
+        )
+        assortment, venue, delivery, payment_method, item = selection_inputs()
+        assortment["items"][0]["options"].append(
+            {
+                "id": "item-config-2",
+                "option_id": "root-option-2",
+                "prerequisite_values": [],
+                "multi_choice_config": {
+                    "total_range": {"min": 0, "max": 1},
+                    "max_single_selections": 1,
+                    "free_selections": 0,
+                },
+            }
+        )
+        assortment["options"].append(
+            {
+                "id": "root-option-2",
+                "type": "choice",
+                "values": [{"id": "value-2", "price": 100}],
+            }
+        )
+        selection = discovered_client.create_selection(
+            assortment,
+            venue=venue,
+            delivery=delivery,
+            payment_method=payment_method,
+            courier_tip=0,
+            items=[item],
+        )
+
+        discovered_client.save_basket(selection)
+        basket = client.save_basket_items(assortment, venue=venue, items=[item])
+
+        self.assertEqual(basket.id, "basket-2")
+        self.assertEqual(basket.venue_id, "venue-1")
+        self.assertEqual(opener.requests[0].data, discovered_opener.requests[2].data)
+        self.assertEqual(
+            json.loads(opener.requests[0].data.decode("utf-8"))["items"][0]["options"],
+            [
+                {
+                    "id": "item-config-1",
+                    "values": [{"id": "value-1", "count": 3, "price": 700}],
+                },
+                {"id": "item-config-2", "values": []},
+            ],
+        )
+
+    def test_save_basket_items_rejects_empty_items_without_posting(self) -> None:
+        client, opener = make_client()
+        assortment, venue, _, _, _ = selection_inputs()
+
+        with self.assertRaises(SelectionError):
+            client.save_basket_items(assortment, venue=venue, items=[])
+
+        self.assertEqual(opener.requests, [])
+
+    def test_save_basket_items_rejects_invalid_basket_response(self) -> None:
+        client, _ = make_client(FakeResponse({"id": "basket-1", "venue_id": ""}))
+        assortment, venue, _, _, item = selection_inputs()
+
+        with self.assertRaises(ResponseShapeError):
+            client.save_basket_items(assortment, venue=venue, items=[item])
 
     def test_rejects_root_ids_restrictions_and_missing_post_checkout_provenance(
         self,

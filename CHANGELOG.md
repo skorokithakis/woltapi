@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+
+### Features
+
+* add Basket.from_saved_basket, WoltClient.save_basket_items, and WoltClient.get_venue_checkout_context
+
+
+### Breaking Changes
+
+* remove WoltClient.get_venue_basket; its per-venue read returns no venue slug or option data, so it cannot rebuild a basket. Use get_baskets_page() instead
+
+
+### Other
+
+* remove the --context-file flag from examples/order.py
+
 ## [0.3.0](https://github.com/skorokithakis/woltapi/compare/v0.2.0...v0.3.0) (2026-09-06)
 
 

@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .credentials import SessionCredentials
-from .errors import HTTPStatusError, ResponseShapeError, SelectionError
+from .errors import ResponseShapeError, SelectionError
 from .models import DeliveryTarget, OrderStatus, PaymentMethod, Venue
 from .purchase import (
     PurchaseAttemptStore,
@@ -29,6 +29,7 @@ from .selection import (
     QuoteSnapshot,
     SavedBasket,
     VenueCheckoutContext,
+    _build_basket_payload,
 )
 from .services import ServiceHost
 from .transport import DEFAULT_TIMEOUT_SECONDS, WoltTransport
@@ -131,22 +132,6 @@ class WoltClient:
             raise ResponseShapeError(ServiceHost.CONSUMER.value)
         return count
 
-    def get_venue_basket(self, venue_id: str) -> dict[str, Any] | None:
-        """Read a venue's server basket, returning ``None`` when it is absent."""
-
-        venue_id = _required_text(venue_id, "venue_id")
-        try:
-            return self._transport.request(
-                ServiceHost.CONSUMER,
-                "GET",
-                "/order-xp/v1/baskets/venue",
-                query={"venue_id": venue_id},
-            )
-        except HTTPStatusError as error:
-            if error.status_code == 404:
-                return None
-            raise
-
     def get_baskets_page(
         self, latitude: int | float, longitude: int | float
     ) -> dict[str, Any]:
@@ -172,6 +157,32 @@ class WoltClient:
             ServiceHost.CONSUMER,
             "GET",
             f"/order-xp/web/v1/pages/venue/slug/{slug}/static",
+        )
+
+    def get_venue_checkout_context(self, venue_slug: str) -> VenueCheckoutContext:
+        """Read the checkout fields supplied by a venue's static page."""
+
+        response = self.get_venue_static(venue_slug)
+        venue = response.get("venue")
+        if not isinstance(venue, Mapping):
+            raise ResponseShapeError(ServiceHost.CONSUMER.value)
+        venue_id = venue.get("id")
+        country = venue.get("country")
+        currency = venue.get("currency")
+        self_delivery = venue.get("self_delivery")
+        if (
+            not _is_nonempty_string(venue_id)
+            or not _is_nonempty_string(country)
+            or not _is_nonempty_string(currency)
+            or not isinstance(self_delivery, bool)
+        ):
+            raise ResponseShapeError(ServiceHost.CONSUMER.value)
+        return VenueCheckoutContext(
+            id=venue_id,
+            country=country,
+            currency=currency,
+            self_delivery=self_delivery,
+            preorder_config=None,
         )
 
     def get_venue_dynamic(
@@ -387,6 +398,27 @@ class WoltClient:
             "POST",
             "/order-xp/v1/baskets",
             json_body=selection.to_basket_payload(),
+        )
+        basket_id = response.get("id")
+        venue_id = response.get("venue_id")
+        if not _is_nonempty_string(basket_id) or not _is_nonempty_string(venue_id):
+            raise ResponseShapeError(ServiceHost.CONSUMER.value)
+        return SavedBasket(id=basket_id, venue_id=venue_id)
+
+    def save_basket_items(
+        self,
+        assortment: Mapping[str, Any],
+        *,
+        venue: VenueCheckoutContext,
+        items: Sequence[ItemSelection],
+    ) -> SavedBasket:
+        """Explicitly upsert a per-venue basket without delivery or payment data."""
+
+        response = self._transport.request(
+            ServiceHost.CONSUMER,
+            "POST",
+            "/order-xp/v1/baskets",
+            json_body=_build_basket_payload(assortment, venue=venue, items=items),
         )
         basket_id = response.get("id")
         venue_id = response.get("venue_id")

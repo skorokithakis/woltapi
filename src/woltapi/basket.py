@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from .errors import SelectionError
+from .errors import ResponseShapeError, SelectionError
 from .selection import (
     ItemSelection,
     OptionSelection,
@@ -65,6 +65,30 @@ class Basket:
         self._language = language
         self._default_substitution_allowed = substitution_allowed
         self._items: dict[str, _BasketItem] = {}
+
+    @classmethod
+    def from_saved_basket(
+        cls,
+        assortment: Mapping[str, Any],
+        saved_basket: Mapping[str, Any],
+        language: str,
+    ) -> Basket:
+        """Rebuild a local basket from one saved consumer-basket entry."""
+
+        saved_items = _saved_basket_items(saved_basket)
+        basket = cls(assortment, language)
+        for item_id, count, options, substitution_allowed in saved_items:
+            if item_id not in basket._catalog_items:
+                raise SelectionError(
+                    f"Saved basket item {item_id!r} is absent from the assortment."
+                )
+            basket.add_item(
+                item_id,
+                count,
+                options,
+                substitution_allowed=substitution_allowed,
+            )
+        return basket
 
     @property
     def contents(self) -> Mapping[str, ItemSelection]:
@@ -265,6 +289,94 @@ def _copy_options(value: Any) -> tuple[OptionSelection, ...]:
     if not _is_array(value):
         raise SelectionError("Item options must be a sequence.")
     return tuple(deepcopy(value))
+
+
+def _saved_basket_items(
+    value: Any,
+) -> tuple[tuple[str, int, tuple[OptionSelection, ...], bool], ...]:
+    if not isinstance(value, Mapping):
+        _saved_basket_shape_error()
+    _validate_saved_venue(value.get("venue"))
+    saved_items = value.get("items")
+    if not _is_array(saved_items):
+        _saved_basket_shape_error()
+
+    items = []
+    for saved_item in saved_items:
+        if not isinstance(saved_item, Mapping):
+            _saved_basket_shape_error()
+        item_id = _saved_nonempty_text(saved_item, "id")
+        _saved_nonempty_text(saved_item, "name")
+        if "price" not in saved_item:
+            _saved_basket_shape_error()
+        count = saved_item.get("count")
+        if not _is_integer(count) or count <= 0:
+            _saved_basket_shape_error()
+        substitution_allowed = _saved_substitution_allowed(
+            saved_item.get("substitution_settings")
+        )
+        if "options" not in saved_item:
+            _saved_basket_shape_error()
+        options = _saved_item_options(saved_item["options"])
+        items.append((item_id, count, options, substitution_allowed))
+    return tuple(items)
+
+
+def _validate_saved_venue(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        _saved_basket_shape_error()
+    for field_name in ("id", "name", "slug", "country"):
+        _saved_nonempty_text(value, field_name)
+    if not isinstance(value.get("available"), bool):
+        _saved_basket_shape_error()
+
+
+def _saved_substitution_allowed(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        _saved_basket_shape_error()
+    is_allowed = value.get("is_allowed")
+    if not isinstance(is_allowed, bool):
+        _saved_basket_shape_error()
+    return is_allowed
+
+
+def _saved_item_options(value: Any) -> tuple[OptionSelection, ...]:
+    if value is None:
+        return ()
+    if not _is_array(value):
+        _saved_basket_shape_error()
+
+    options = []
+    for option in value:
+        if not isinstance(option, Mapping):
+            _saved_basket_shape_error()
+        configuration_id = _saved_nonempty_text(option, "id")
+        saved_values = option.get("values")
+        if not _is_array(saved_values):
+            _saved_basket_shape_error()
+        values = []
+        for saved_value in saved_values:
+            if not isinstance(saved_value, Mapping):
+                _saved_basket_shape_error()
+            value_id = _saved_nonempty_text(saved_value, "id")
+            count = saved_value.get("count")
+            if not _is_integer(count) or count <= 0:
+                _saved_basket_shape_error()
+            values.append(OptionValueSelection(value_id, count))
+        if values:
+            options.append(OptionSelection(configuration_id, values))
+    return tuple(options)
+
+
+def _saved_nonempty_text(value: Mapping[str, Any], field_name: str) -> str:
+    field_value = value.get(field_name)
+    if not _is_nonempty_text(field_value):
+        _saved_basket_shape_error()
+    return field_value
+
+
+def _saved_basket_shape_error() -> None:
+    raise ResponseShapeError("consumer")
 
 
 def _item_id(value: Any) -> str:

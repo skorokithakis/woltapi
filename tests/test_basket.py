@@ -9,6 +9,7 @@ from woltapi import (
     DeliverySelection,
     OptionSelection,
     OptionValueSelection,
+    ResponseShapeError,
     SelectionError,
     VenueCheckoutContext,
 )
@@ -104,6 +105,33 @@ def topping(configuration_id: str, value_id: str, count: int = 1) -> OptionSelec
         configuration_id=configuration_id,
         values=[OptionValueSelection(value_id, count)],
     )
+
+
+def saved_basket() -> dict[str, Any]:
+    return {
+        "venue": {
+            "id": "venue-1",
+            "name": "Pizza Place",
+            "slug": "pizza-place",
+            "country": "FI",
+            "available": True,
+        },
+        "items": [
+            {
+                "id": "item-1",
+                "name": "Saved pizza name",
+                "count": 2,
+                "price": 1,
+                "substitution_settings": {"is_allowed": True},
+                "options": [
+                    {
+                        "id": "pizza-toppings",
+                        "values": [{"id": "cheese", "count": 1}],
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def test_basket_derives_line_totals_and_feeds_order_selection() -> None:
@@ -227,3 +255,62 @@ def test_basket_copies_assortment_and_option_input() -> None:
     selected[0].values[0] = OptionValueSelection("olives", 1)
 
     assert basket.item_selections()[0].basket_price == 815
+
+
+def test_basket_from_saved_basket_rebuilds_catalog_prices_and_options() -> None:
+    basket = Basket.from_saved_basket(assortment(), saved_basket(), "en")
+
+    assert [
+        (item.id, item.count, item.basket_name, item.basket_price, item.options)
+        for item in basket.item_selections()
+    ] == [
+        (
+            "item-1",
+            2,
+            "Pizza",
+            1630,
+            (topping("pizza-toppings", "cheese"),),
+        )
+    ]
+    assert basket.item_selections()[0].substitution_allowed is True
+
+
+def test_basket_from_saved_basket_skips_unchosen_option_configurations() -> None:
+    saved = saved_basket()
+    saved["items"][0]["options"].append({"id": "pizza-toppings", "values": []})
+
+    basket = Basket.from_saved_basket(assortment(), saved, "en")
+
+    assert basket.item_selections()[0].options == (topping("pizza-toppings", "cheese"),)
+
+
+def test_basket_from_saved_basket_rejects_removed_item_without_response_name() -> None:
+    saved = saved_basket()
+    saved["items"][0]["name"] = "Response-only pizza name"
+    data = assortment()
+    data["items"] = []
+
+    with pytest.raises(SelectionError) as error:
+        Basket.from_saved_basket(data, saved, "en")
+
+    assert "item-1" in str(error.value)
+    assert "Response-only pizza name" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda saved: saved.pop("items"),
+        lambda saved: saved["items"][0].pop("options"),
+        lambda saved: saved["items"][0]["options"][0].pop("id"),
+        lambda saved: saved["items"][0]["options"][0].update(values={}),
+    ],
+)
+def test_basket_from_saved_basket_rejects_malformed_response_entries(change) -> None:
+    saved = saved_basket()
+    change(saved)
+
+    with pytest.raises(ResponseShapeError) as error:
+        Basket.from_saved_basket(assortment(), saved, "en")
+
+    assert error.value.service == "consumer"
