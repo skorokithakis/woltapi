@@ -937,6 +937,7 @@ def _purchase_option_summary(option: Mapping[str, Any]) -> PurchaseOptionSummary
 
 
 def _purchase_name_summaries(names: Any, label: str) -> tuple[PurchaseNameSummary, ...]:
+    # This list shape is correct for /v2/purchases; do not accept strings (verified by capture).
     if not _is_array(names) or not names:
         raise PurchasePreparationError(f"{label} are incomplete.")
     summaries: list[PurchaseNameSummary] = []

@@ -81,11 +81,25 @@ def assortment() -> dict[str, Any]:
                 "vat_percentage_decimal": "14.0",
                 "options": [],
             },
+            {
+                "id": "item-waffle",
+                "name": "Βέλγικη Βάφλα",
+                "price": 525,
+                "checksum": "checksum-waffle",
+                "allowed_delivery_methods": ["homedelivery"],
+                "restrictions": [],
+                "alcohol_permille": 0,
+                "product_hierarchy_tags": ["food", "dessert"],
+                "vat_percentage": 14,
+                "vat_percentage_decimal": "14.0",
+                "options": [],
+            },
         ],
         "categories": [
             {"id": "pizza", "item_ids": ["item-1"]},
             {"id": "salad", "item_ids": ["item-2"]},
             {"id": "other", "item_ids": ["item-removed"]},
+            {"id": "dessert", "item_ids": ["item-waffle"]},
         ],
         "options": [
             {
@@ -234,7 +248,6 @@ def test_basket_mutation_rejects_duplicates_and_contents_are_detached() -> None:
         lambda data: data["categories"][0]["item_ids"].clear(),
         lambda data: data["items"][0].update(price=1.5),
         lambda data: data["options"][0]["values"][0].update(price=True),
-        lambda data: data["items"][0].update(name=[{"lang": "fi", "value": "Pizza"}]),
     ],
 )
 def test_basket_rejects_missing_catalog_fields_invalid_prices_and_names(change) -> None:
@@ -244,6 +257,25 @@ def test_basket_rejects_missing_catalog_fields_invalid_prices_and_names(change) 
     basket = Basket(data, "en")
     with pytest.raises(SelectionError):
         basket.add_item("item-1", options=[topping("pizza-toppings", "cheese")])
+
+
+def test_basket_falls_back_to_first_list_name_without_language_match() -> None:
+    data = assortment()
+    data["items"][0]["name"] = [{"lang": "fi", "value": "Pizza"}]
+
+    basket = Basket(data, "en")
+    basket.add_item("item-1")
+
+    assert basket.item_selections()[0].basket_name == "Pizza"
+
+
+def test_basket_rejects_unusable_name_shape() -> None:
+    data = assortment()
+    data["items"][0]["name"] = {"value": "Pizza"}
+
+    basket = Basket(data, "en")
+    with pytest.raises(SelectionError):
+        basket.add_item("item-1")
 
 
 def test_basket_copies_assortment_and_option_input() -> None:
@@ -273,6 +305,19 @@ def test_basket_from_saved_basket_rebuilds_catalog_prices_and_options() -> None:
         )
     ]
     assert basket.item_selections()[0].substitution_allowed is True
+
+
+def test_basket_uses_plain_string_catalog_names_when_adding_and_rebuilding() -> None:
+    basket = Basket(assortment(), "en")
+    basket.add_item("item-waffle")
+
+    assert basket.item_selections()[0].basket_name == "Βέλγικη Βάφλα"
+
+    saved = saved_basket()
+    saved["items"][0].update(id="item-waffle", options=[])
+    rebuilt = Basket.from_saved_basket(assortment(), saved, "en")
+
+    assert rebuilt.item_selections()[0].basket_name == "Βέλγικη Βάφλα"
 
 
 def test_basket_from_saved_basket_skips_unchosen_option_configurations() -> None:

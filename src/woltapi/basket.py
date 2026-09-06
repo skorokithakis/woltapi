@@ -265,6 +265,10 @@ def _index_by_id(value: Any) -> dict[str, Mapping[str, Any]]:
 
 
 def _translated_name(value: Any, language: str) -> str:
+    # Catalog/read endpoints return strings; only restaurant-api purchase payloads
+    # (/v2/purchases, /v1/post-checkout-config) use list-of-{lang, value} names.
+    if _is_nonempty_text(value):
+        return value
     if not _is_array(value):
         raise SelectionError("The selected item is missing translated names.")
     for translation in value:
@@ -274,7 +278,12 @@ def _translated_name(value: Any, language: str) -> str:
         name = translation.get("value")
         if translation_language == language and _is_nonempty_text(name):
             return name
-    raise SelectionError("The selected item has no name for the basket language.")
+    for translation in value:
+        if isinstance(translation, Mapping) and _is_nonempty_text(
+            name := translation.get("value")
+        ):
+            return name
+    raise SelectionError("The selected item has no usable name.")
 
 
 def _required_fields(
